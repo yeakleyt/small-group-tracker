@@ -1,0 +1,605 @@
+import type { Express, Request, Response } from "express";
+import type { Server } from "http";
+import bcrypt from "bcryptjs";
+import { nanoid } from "nanoid";
+import { storage } from "./storage";
+import type { InsertMeeting, InsertGroup, InsertFoodSlot } from "../shared/schema";
+
+// ─── Auth helpers ───────────────────────────────────────────────────────────
+
+function requireAuth(req: Request, res: Response): number | null {
+  const userId = (req.session as any)?.userId as number | undefined;
+  if (!userId) {
+    res.status(401).json({ error: "Not authenticated" });
+    return null;
+  }
+  return userId;
+}
+
+function requireAppAdmin(req: Request, res: Response): number | null {
+  const userId = requireAuth(req, res);
+  if (!userId) return null;
+  const user = storage.getUserById(userId);
+  if (!user || user.appRole !== "app_admin") {
+    res.status(403).json({ error: "App admin required" });
+    return null;
+  }
+  return userId;
+}
+
+function requireGroupAccess(req: Request, res: Response, groupId: number): { userId: number; role: string } | null {
+  const userId = requireAuth(req, res);
+  if (!userId) return null;
+  const user = storage.getUserById(userId);
+  if (!user) { res.status(401).json({ error: "Not found" }); return null; }
+  if (user.appRole === "app_admin") return { userId, role: "app_admin" };
+  const membership = storage.getMembership(userId, groupId);
+  if (!membership) { res.status(403).json({ error: "No access to this group" }); return null; }
+  return { userId, role: membership.role };
+}
+
+function requireGroupAdmin(req: Request, res: Response, groupId: number): number | null {
+  const access = requireGroupAccess(req, res, groupId);
+  if (!access) return null;
+  if (access.role !== "group_admin" && access.role !== "app_admin") {
+    res.status(403).json({ error: "Group admin required" });
+    return null;
+  }
+  return access.userId;
+}
+
+// ─── Route registration ─────────────────────────────────────────────────────
+
+export function registerRoutes(httpServer: Server, app: Express) {
+  // ── Auth ──────────────────────────────────────────────────────────────────
+
+  app.post("/api/auth/login", async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+    const user = storage.getUserByEmail(email);
+    if (!user || !user.isActive) return res.status(401).json({ error: "Invalid credentials" });
+    const match = await bcrypt.compare(password, user.passwordHash);
+    if (!match) return res.status(401).json({ error: "Invalid credentials" });
+    (req.session as any).userId = user.id;
+    const { passwordHash, ...safeUser } = user;
+    return res.json({ user: safeUser });
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy(() => res.json({ ok: true }));
+  });
+
+  app.get("/api/auth/me", (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    const user = storage.getUserById(userId);
+    if (!user) return res.status(401).json({ error: "User not found" });
+    const { passwordHash, ...safeUser } = user;
+    return res.json({ user: safeUser });
+  });
+
+  // Change own password
+  app.post("/api/auth/change-password", async (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const { currentPassword, newPassword } = req.body;
+    const user = storage.getUserById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    const match = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!match) return res.status(400).json({ error: "Current password is incorrect" });
+    if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    const hash = await bcrypt.hash(newPassword, 10);
+    storage.updateUser(userId, { passwordHash: hash });
+    return res.json({ ok: true });
+  });
+
+  // ── Invitations ───────────────────────────────────────────────────────────
+
+  app.post("/api/invitations", async (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const user = storage.getUserById(userId);
+    if (!user) return res.status(401).json({ error: "Not found" });
+
+    const { email, groupId, groupRole } = req.body;
+    if (!email) return res.status(400).json({ error: "Email required" });
+
+    // Permission check
+    if (groupId) {
+      const gid = Number(groupId);
+      if (user.appRole !== "app_admin") {
+        const membership = storage.getMembership(userId, gid);
+        if (!membership || membership.role !== "group_admin") {
+          return res.status(403).json({ error: "Must be group admin to invite to this group" });
+        }
+      }
+    } else {
+      if (user.appRole !== "app_admin") return res.status(403).json({ error: "App admin required" });
+    }
+
+    const token = nanoid(32);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const inv = storage.createInvitation({
+      token,
+      email: email.toLowerCase(),
+      groupId: groupId ? Number(groupId) : null,
+      groupRole: groupRole || "member",
+      invitedByUserId: userId,
+      expiresAt,
+    });
+    return res.json(inv);
+  });
+
+  // Get invitations (app admin sees all, group admin sees their groups)
+  app.get("/api/invitations", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const user = storage.getUserById(userId)!;
+    const invs = storage.getInvitationsCreatedBy(userId);
+    return res.json(invs);
+  });
+
+  app.delete("/api/invitations/:id", (req, res) => {
+    const userId = requireAppAdmin(req, res);
+    if (!userId) return;
+    // Allow deletion by marking used
+    storage.markInvitationUsed(Number(req.params.id));
+    return res.json({ ok: true });
+  });
+
+  // Get invitation details by token (public)
+  app.get("/api/invitations/token/:token", (req, res) => {
+    const inv = storage.getInvitationByToken(req.params.token);
+    if (!inv) return res.status(404).json({ error: "Invitation not found" });
+    if (inv.isUsed) return res.status(410).json({ error: "Invitation already used" });
+    if (new Date(inv.expiresAt) < new Date()) return res.status(410).json({ error: "Invitation expired" });
+    const group = inv.groupId ? storage.getGroupById(inv.groupId) : null;
+    return res.json({ invitation: inv, group });
+  });
+
+  // Accept invitation — create account
+  app.post("/api/invitations/accept", async (req, res) => {
+    const { token, firstName, lastName, password } = req.body;
+    if (!token || !firstName || !lastName || !password) {
+      return res.status(400).json({ error: "All fields required" });
+    }
+    const inv = storage.getInvitationByToken(token);
+    if (!inv) return res.status(404).json({ error: "Invitation not found" });
+    if (inv.isUsed) return res.status(410).json({ error: "Invitation already used" });
+    if (new Date(inv.expiresAt) < new Date()) return res.status(410).json({ error: "Invitation expired" });
+    if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+
+    // Check if user already exists
+    let user = storage.getUserByEmail(inv.email);
+    if (!user) {
+      const hash = await bcrypt.hash(password, 10);
+      user = storage.createUser({
+        email: inv.email,
+        passwordHash: hash,
+        firstName,
+        lastName,
+        appRole: "member",
+        isActive: true,
+      });
+    }
+
+    // Add to group if invitation has a group
+    if (inv.groupId) {
+      const existing = storage.getMembership(user.id, inv.groupId);
+      if (!existing) {
+        storage.addMember({ userId: user.id, groupId: inv.groupId, role: inv.groupRole || "member" });
+      }
+    }
+
+    storage.markInvitationUsed(inv.id);
+    (req.session as any).userId = user.id;
+    const { passwordHash, ...safeUser } = user;
+    return res.json({ user: safeUser });
+  });
+
+  // ── Users ─────────────────────────────────────────────────────────────────
+
+  app.get("/api/users", (req, res) => {
+    const userId = requireAppAdmin(req, res);
+    if (!userId) return;
+    const all = storage.getAllUsers().map(({ passwordHash, ...u }) => u);
+    return res.json(all);
+  });
+
+  app.get("/api/users/me", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const user = storage.getUserById(userId);
+    if (!user) return res.status(404).json({ error: "Not found" });
+    const { passwordHash, ...safe } = user;
+    return res.json(safe);
+  });
+
+  app.patch("/api/users/me", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const { firstName, lastName } = req.body;
+    const updated = storage.updateUser(userId, { firstName, lastName });
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    const { passwordHash, ...safe } = updated;
+    return res.json(safe);
+  });
+
+  app.patch("/api/users/:id/role", (req, res) => {
+    const adminId = requireAppAdmin(req, res);
+    if (!adminId) return;
+    const { appRole } = req.body;
+    const updated = storage.updateUser(Number(req.params.id), { appRole });
+    if (!updated) return res.status(404).json({ error: "User not found" });
+    const { passwordHash, ...safe } = updated;
+    return res.json(safe);
+  });
+
+  app.patch("/api/users/:id/status", (req, res) => {
+    const adminId = requireAppAdmin(req, res);
+    if (!adminId) return;
+    const { isActive } = req.body;
+    const updated = storage.updateUser(Number(req.params.id), { isActive });
+    if (!updated) return res.status(404).json({ error: "User not found" });
+    const { passwordHash, ...safe } = updated;
+    return res.json(safe);
+  });
+
+  // ── Groups ────────────────────────────────────────────────────────────────
+
+  app.get("/api/groups", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const user = storage.getUserById(userId)!;
+    const groupList = user.appRole === "app_admin"
+      ? storage.getAllGroups()
+      : storage.getGroupsForUser(userId);
+    return res.json(groupList);
+  });
+
+  app.post("/api/groups", (req, res) => {
+    const userId = requireAppAdmin(req, res);
+    if (!userId) return;
+    const { name, description, location, meetingDay, meetingTime } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    const group = storage.createGroup({ name, description, location, meetingDay, meetingTime, isArchived: false });
+    return res.json(group);
+  });
+
+  app.get("/api/groups/:id", (req, res) => {
+    const gid = Number(req.params.id);
+    const access = requireGroupAccess(req, res, gid);
+    if (!access) return;
+    const group = storage.getGroupById(gid);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    return res.json(group);
+  });
+
+  app.patch("/api/groups/:id", (req, res) => {
+    const gid = Number(req.params.id);
+    const adminId = requireGroupAdmin(req, res, gid);
+    if (!adminId) return;
+    const { name, description, location, meetingDay, meetingTime, isArchived } = req.body;
+    const updated = storage.updateGroup(gid, { name, description, location, meetingDay, meetingTime, isArchived });
+    if (!updated) return res.status(404).json({ error: "Group not found" });
+    return res.json(updated);
+  });
+
+  app.delete("/api/groups/:id", (req, res) => {
+    const userId = requireAppAdmin(req, res);
+    if (!userId) return;
+    storage.deleteGroup(Number(req.params.id));
+    return res.json({ ok: true });
+  });
+
+  // ── Group Members ─────────────────────────────────────────────────────────
+
+  app.get("/api/groups/:id/members", (req, res) => {
+    const gid = Number(req.params.id);
+    const access = requireGroupAccess(req, res, gid);
+    if (!access) return;
+    const memberships = storage.getMembershipsForGroup(gid);
+    const result = memberships.map(m => {
+      const user = storage.getUserById(m.userId);
+      if (!user) return null;
+      const { passwordHash, ...safe } = user;
+      return { ...m, user: safe };
+    }).filter(Boolean);
+    return res.json(result);
+  });
+
+  app.post("/api/groups/:id/members", (req, res) => {
+    const gid = Number(req.params.id);
+    const adminId = requireGroupAdmin(req, res, gid);
+    if (!adminId) return;
+    const { userId, role } = req.body;
+    const existing = storage.getMembership(Number(userId), gid);
+    if (existing) return res.status(409).json({ error: "User is already a member" });
+    const membership = storage.addMember({ userId: Number(userId), groupId: gid, role: role || "member" });
+    return res.json(membership);
+  });
+
+  app.patch("/api/groups/:id/members/:userId/role", (req, res) => {
+    const gid = Number(req.params.id);
+    const adminId = requireGroupAdmin(req, res, gid);
+    if (!adminId) return;
+    const { role } = req.body;
+    storage.updateMemberRole(Number(req.params.userId), gid, role);
+    return res.json({ ok: true });
+  });
+
+  app.delete("/api/groups/:id/members/:userId", (req, res) => {
+    const gid = Number(req.params.id);
+    const requesterId = requireAuth(req, res);
+    if (!requesterId) return;
+    const requester = storage.getUserById(requesterId)!;
+    const targetUserId = Number(req.params.userId);
+    // Allow self-removal OR group admin OR app admin
+    if (requesterId !== targetUserId && requester.appRole !== "app_admin") {
+      const membership = storage.getMembership(requesterId, gid);
+      if (!membership || membership.role !== "group_admin") {
+        return res.status(403).json({ error: "Not allowed" });
+      }
+    }
+    storage.removeMember(targetUserId, gid);
+    return res.json({ ok: true });
+  });
+
+  // ── Meetings ──────────────────────────────────────────────────────────────
+
+  app.get("/api/groups/:id/meetings", (req, res) => {
+    const gid = Number(req.params.id);
+    const access = requireGroupAccess(req, res, gid);
+    if (!access) return;
+    const meetingList = storage.getMeetingsForGroup(gid);
+    return res.json(meetingList);
+  });
+
+  app.post("/api/groups/:id/meetings", (req, res) => {
+    const gid = Number(req.params.id);
+    const adminId = requireGroupAdmin(req, res, gid);
+    if (!adminId) return;
+    const { title, date, startTime, endTime, location, notes, hostUserId } = req.body;
+    if (!title || !date || !startTime || !endTime) {
+      return res.status(400).json({ error: "Title, date, start time, and end time are required" });
+    }
+    const meeting = storage.createMeeting({
+      groupId: gid, title, date, startTime, endTime,
+      location: location || null,
+      notes: notes || null,
+      hostUserId: hostUserId ? Number(hostUserId) : null,
+      isLeaderLocked: false,
+    });
+    return res.json(meeting);
+  });
+
+  app.get("/api/meetings/:id", (req, res) => {
+    const meeting = storage.getMeetingById(Number(req.params.id));
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const access = requireGroupAccess(req, res, meeting.groupId);
+    if (!access) return;
+    const leader = storage.getLeaderSignupForMeeting(meeting.id);
+    const slots = storage.getFoodSlotsForMeeting(meeting.id);
+    const leaderUser = leader ? storage.getUserById(leader.userId) : null;
+    const enrichedSlots = slots.map(s => ({
+      ...s,
+      assignedUser: s.assignedUserId ? (() => {
+        const u = storage.getUserById(s.assignedUserId!);
+        if (!u) return null;
+        const { passwordHash, ...safe } = u;
+        return safe;
+      })() : null,
+    }));
+    return res.json({
+      meeting,
+      leader: leader ? { ...leader, user: leaderUser ? (() => { const { passwordHash, ...s } = leaderUser; return s; })() : null } : null,
+      foodSlots: enrichedSlots,
+    });
+  });
+
+  app.patch("/api/meetings/:id", (req, res) => {
+    const meeting = storage.getMeetingById(Number(req.params.id));
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const adminId = requireGroupAdmin(req, res, meeting.groupId);
+    if (!adminId) return;
+    const { title, date, startTime, endTime, location, notes, hostUserId, isLeaderLocked } = req.body;
+    const updated = storage.updateMeeting(meeting.id, { title, date, startTime, endTime, location, notes, hostUserId: hostUserId ? Number(hostUserId) : null, isLeaderLocked });
+    return res.json(updated);
+  });
+
+  app.delete("/api/meetings/:id", (req, res) => {
+    const meeting = storage.getMeetingById(Number(req.params.id));
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const adminId = requireGroupAdmin(req, res, meeting.groupId);
+    if (!adminId) return;
+    storage.deleteMeeting(meeting.id);
+    return res.json({ ok: true });
+  });
+
+  // Upcoming meetings for current user
+  app.get("/api/meetings/upcoming/me", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const upcomingList = storage.getUpcomingMeetingsForUser(userId, 20);
+    return res.json(upcomingList);
+  });
+
+  // ── Leader Signups ────────────────────────────────────────────────────────
+
+  app.post("/api/meetings/:id/leader", (req, res) => {
+    const meetingId = Number(req.params.id);
+    const meeting = storage.getMeetingById(meetingId);
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const access = requireGroupAccess(req, res, meeting.groupId);
+    if (!access) return;
+
+    if (meeting.isLeaderLocked && access.role !== "group_admin" && access.role !== "app_admin") {
+      return res.status(403).json({ error: "Leader slot is locked" });
+    }
+    const isPast = new Date(meeting.date) < new Date(new Date().toISOString().split("T")[0]);
+    if (isPast) return res.status(400).json({ error: "Cannot sign up for past meetings" });
+
+    const existing = storage.getLeaderSignupForMeeting(meetingId);
+    if (existing) return res.status(409).json({ error: "Leader slot already taken" });
+
+    const { targetUserId } = req.body;
+    const signupUserId = (access.role === "group_admin" || access.role === "app_admin") && targetUserId
+      ? Number(targetUserId)
+      : access.userId;
+
+    const signup = storage.createLeaderSignup({
+      meetingId,
+      userId: signupUserId,
+      assignedByAdminId: (access.role === "group_admin" || access.role === "app_admin") && targetUserId ? access.userId : null,
+    });
+    return res.json(signup);
+  });
+
+  app.delete("/api/meetings/:id/leader", (req, res) => {
+    const meetingId = Number(req.params.id);
+    const meeting = storage.getMeetingById(meetingId);
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const access = requireGroupAccess(req, res, meeting.groupId);
+    if (!access) return;
+
+    const isPast = new Date(meeting.date) < new Date(new Date().toISOString().split("T")[0]);
+    const existing = storage.getLeaderSignupForMeeting(meetingId);
+    if (!existing) return res.status(404).json({ error: "No leader signup to remove" });
+
+    // Members can only remove their own
+    if (access.role === "member" && existing.userId !== access.userId) {
+      return res.status(403).json({ error: "Can only remove your own signup" });
+    }
+    if (access.role === "member" && isPast) {
+      return res.status(400).json({ error: "Cannot remove signup for past meetings" });
+    }
+
+    storage.deleteLeaderSignup(meetingId);
+    return res.json({ ok: true });
+  });
+
+  // ── Food Slots ────────────────────────────────────────────────────────────
+
+  app.post("/api/meetings/:id/food-slots", (req, res) => {
+    const meetingId = Number(req.params.id);
+    const meeting = storage.getMeetingById(meetingId);
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const adminId = requireGroupAdmin(req, res, meeting.groupId);
+    if (!adminId) return;
+    const { label } = req.body;
+    if (!label) return res.status(400).json({ error: "Label required" });
+    const slot = storage.createFoodSlot({ meetingId, label, assignedUserId: null, isLocked: false });
+    return res.json(slot);
+  });
+
+  app.patch("/api/food-slots/:id", (req, res) => {
+    const slotId = Number(req.params.id);
+    const slot = storage.getFoodSlotsForMeeting(0); // dummy load
+    const existing = (() => {
+      // find slot directly
+      const allSlots = storage.getFoodSlotsForMeeting(0);
+      return null; // will query individually below
+    })();
+    // We need to look up the slot
+    const allForMeeting = storage.getFoodSlotsForMeeting(Number(req.body.meetingId || 0));
+    // Find it by id by querying storage differently - use direct approach
+    const { meetingId, label, isLocked, assignedUserId } = req.body;
+    if (!meetingId) return res.status(400).json({ error: "meetingId required" });
+    const meeting = storage.getMeetingById(Number(meetingId));
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const adminId = requireGroupAdmin(req, res, meeting.groupId);
+    if (!adminId) return;
+    const updated = storage.updateFoodSlot(slotId, { label, isLocked, assignedUserId });
+    return res.json(updated);
+  });
+
+  app.delete("/api/food-slots/:id", (req, res) => {
+    const slotId = Number(req.params.id);
+    const { meetingId } = req.body;
+    if (!meetingId) return res.status(400).json({ error: "meetingId required" });
+    const meeting = storage.getMeetingById(Number(meetingId));
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const adminId = requireGroupAdmin(req, res, meeting.groupId);
+    if (!adminId) return;
+    storage.deleteFoodSlot(slotId);
+    return res.json({ ok: true });
+  });
+
+  // Claim food slot (member)
+  app.post("/api/food-slots/:id/claim", (req, res) => {
+    const slotId = Number(req.params.id);
+    const { meetingId } = req.body;
+    if (!meetingId) return res.status(400).json({ error: "meetingId required" });
+    const meeting = storage.getMeetingById(Number(meetingId));
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const access = requireGroupAccess(req, res, meeting.groupId);
+    if (!access) return;
+
+    const isPast = new Date(meeting.date) < new Date(new Date().toISOString().split("T")[0]);
+    if (isPast) return res.status(400).json({ error: "Cannot claim slots for past meetings" });
+
+    const slots = storage.getFoodSlotsForMeeting(meeting.id);
+    const slot = slots.find(s => s.id === slotId);
+    if (!slot) return res.status(404).json({ error: "Slot not found" });
+    if (slot.isLocked) return res.status(403).json({ error: "Slot is locked" });
+    if (slot.assignedUserId) return res.status(409).json({ error: "Slot already claimed" });
+
+    const updated = storage.claimFoodSlot(slotId, access.userId);
+    return res.json(updated);
+  });
+
+  // Unclaim food slot (member or admin)
+  app.post("/api/food-slots/:id/unclaim", (req, res) => {
+    const slotId = Number(req.params.id);
+    const { meetingId } = req.body;
+    if (!meetingId) return res.status(400).json({ error: "meetingId required" });
+    const meeting = storage.getMeetingById(Number(meetingId));
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const access = requireGroupAccess(req, res, meeting.groupId);
+    if (!access) return;
+
+    const isPast = new Date(meeting.date) < new Date(new Date().toISOString().split("T")[0]);
+    const slots = storage.getFoodSlotsForMeeting(meeting.id);
+    const slot = slots.find(s => s.id === slotId);
+    if (!slot) return res.status(404).json({ error: "Slot not found" });
+
+    // Members can only unclaim their own; admins can unclaim anything
+    if (access.role === "member") {
+      if (slot.assignedUserId !== access.userId) return res.status(403).json({ error: "Can only unclaim your own slot" });
+      if (isPast) return res.status(400).json({ error: "Cannot unclaim past meetings" });
+    }
+
+    const updated = storage.unclaimFoodSlot(slotId);
+    return res.json(updated);
+  });
+
+  // ── Dashboard data ────────────────────────────────────────────────────────
+
+  app.get("/api/dashboard", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const user = storage.getUserById(userId)!;
+
+    const upcoming = storage.getUpcomingMeetingsForUser(userId, 10);
+    const openLeader: any[] = [];
+    const openFood: any[] = [];
+
+    for (const meeting of upcoming) {
+      const leader = storage.getLeaderSignupForMeeting(meeting.id);
+      if (!leader && !meeting.isLeaderLocked) {
+        openLeader.push(meeting);
+      }
+      const slots = storage.getFoodSlotsForMeeting(meeting.id);
+      const openSlots = slots.filter(s => !s.assignedUserId && !s.isLocked);
+      if (openSlots.length) {
+        openFood.push({ meeting, openSlots });
+      }
+    }
+
+    const groups = user.appRole === "app_admin"
+      ? storage.getAllGroups()
+      : storage.getGroupsForUser(userId);
+
+    return res.json({ upcoming: upcoming.slice(0, 5), openLeader: openLeader.slice(0, 5), openFood: openFood.slice(0, 5), groups });
+  });
+}
