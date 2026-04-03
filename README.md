@@ -2,6 +2,8 @@
 
 A production-ready web application for managing multiple small groups inside one shared app. Supports three role levels, invite-only membership, meeting management, and volunteer signups for both group leaders and food coordination.
 
+Let the testing beging!
+
 ---
 
 ## Table of Contents
