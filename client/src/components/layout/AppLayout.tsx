@@ -60,7 +60,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       {/* Logo */}
       <div className="flex items-center gap-3 px-4 py-4 border-b border-sidebar-border">
         <div className="flex items-center gap-2">
-          <svg viewBox="0 0 32 32" className="h-7 w-7" aria-label="Small Group Tracker" fill="none">
+          <svg viewBox="0 0 32 32" className="h-7 w-7" aria-label="Small Group Manager" fill="none">
             <circle cx="16" cy="16" r="14" stroke="hsl(239,65%,65%)" strokeWidth="2" />
             <circle cx="10" cy="14" r="3" fill="hsl(239,65%,65%)" />
             <circle cx="22" cy="14" r="3" fill="hsl(239,65%,65%)" />
@@ -145,7 +145,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <span className="font-semibold text-sm">Small Group Tracker</span>
+          <span className="font-semibold text-sm">Small Group Manager</span>
           {user?.appRole === "app_admin" && (
             <Badge variant="secondary" className="ml-auto text-xs">Admin</Badge>
           )}

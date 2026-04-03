@@ -36,7 +36,7 @@ export function LoginPage() {
         {/* Logo */}
         <div className="flex flex-col items-center gap-3 text-center">
           <div className="flex items-center justify-center h-14 w-14 rounded-2xl bg-primary/10 border border-primary/20">
-            <svg viewBox="0 0 32 32" className="h-8 w-8" fill="none" aria-label="Small Group Tracker">
+            <svg viewBox="0 0 32 32" className="h-8 w-8" fill="none" aria-label="Small Group Manager">
               <circle cx="16" cy="16" r="14" stroke="hsl(239,65%,50%)" strokeWidth="2" />
               <circle cx="10" cy="14" r="3" fill="hsl(239,65%,50%)" />
               <circle cx="22" cy="14" r="3" fill="hsl(239,65%,50%)" />
@@ -47,7 +47,7 @@ export function LoginPage() {
             </svg>
           </div>
           <div>
-            <h1 className="text-xl font-bold text-foreground">Small Group Tracker</h1>
+            <h1 className="text-xl font-bold text-foreground">Small Group Manager</h1>
             <p className="text-sm text-muted-foreground">Sign in to your account</p>
           </div>
         </div>

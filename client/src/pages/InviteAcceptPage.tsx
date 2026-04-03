@@ -101,8 +101,8 @@ export function InviteAcceptPage() {
           <h1 className="text-xl font-bold">You're Invited!</h1>
           <p className="text-sm text-muted-foreground">
             {data.group
-              ? <>Join <strong>{data.group.name}</strong> on Small Group Tracker</>
-              : <>Join Small Group Tracker</>}
+              ? <>Join <strong>{data.group.name}</strong> on Small Group Manager</>
+              : <>Join Small Group Manager</>}
           </p>
           <p className="text-xs text-muted-foreground">Invitation for: <strong>{data.invitation.email}</strong></p>
         </div>
