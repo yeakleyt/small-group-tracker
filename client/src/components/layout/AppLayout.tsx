@@ -44,8 +44,8 @@ export function AppLayout({ children }: AppLayoutProps) {
           className={cn(
             "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer",
             isActive
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+              ? "bg-indigo-600 text-white font-semibold"
+              : "text-white/90 hover:text-white hover:bg-white/10"
           )}
         >
           <Icon className="h-4 w-4 shrink-0" />
@@ -56,7 +56,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   }
 
   const sidebar = (
-    <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground">
+    <div className="flex flex-col h-full text-white" style={{ backgroundColor: 'hsl(228, 25%, 12%)' }}>
       {/* Logo */}
       <div className="flex items-center gap-3 px-4 py-4 border-b border-sidebar-border">
         <div className="flex items-center gap-2">
@@ -80,7 +80,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         {user?.appRole === "app_admin" && (
           <>
             <div className="pt-4 pb-1 px-3">
-              <p className="text-xs font-medium text-sidebar-foreground/40 uppercase tracking-wider">Admin</p>
+              <p className="text-xs font-medium text-white/50 uppercase tracking-wider">Admin</p>
             </div>
             {adminNavItems.map(item => <NavLink key={item.href} {...item} />)}
           </>
@@ -120,7 +120,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       {/* Desktop sidebar */}
-      <aside className="hidden lg:flex lg:w-60 lg:flex-col lg:shrink-0 border-r border-border">
+      <aside className="hidden lg:flex lg:w-60 lg:flex-col lg:shrink-0 border-r border-border" style={{ backgroundColor: 'hsl(228, 25%, 12%)' }}>
         {sidebar}
       </aside>
 
@@ -128,7 +128,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       {sidebarOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <div className="fixed inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
-          <div className="fixed inset-y-0 left-0 w-64 z-50 shadow-xl">
+          <div className="fixed inset-y-0 left-0 w-64 z-50 shadow-xl" style={{ backgroundColor: 'hsl(228, 25%, 12%)' }}>
             {sidebar}
           </div>
         </div>
