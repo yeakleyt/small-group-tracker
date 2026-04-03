@@ -13,7 +13,8 @@ import {
 } from "../shared/schema";
 import bcrypt from "bcryptjs";
 
-const sqlite = new Database("./data.db");
+const dbPath = process.env.NODE_ENV === "production" ? "/data/small-group-tracker.db" : "./data.db";
+const sqlite = new Database(dbPath);
 export const db = drizzle(sqlite);
 
 // ─── Schema migration ───────────────────────────────────────────────────────
