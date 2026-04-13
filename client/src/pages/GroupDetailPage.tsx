@@ -15,9 +15,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, Archive } from "lucide-react";
+import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus } from "lucide-react";
 import { format, parseISO } from "date-fns";
-import type { Group, MemberWithUser, Meeting } from "@/lib/types";
+import type { Group, MemberWithUser, Meeting, User } from "@/lib/types";
 import { Link } from "wouter";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -34,10 +34,13 @@ export function GroupDetailPage() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [editForm, setEditForm] = useState<Partial<Group>>({});
   const [removeTarget, setRemoveTarget] = useState<number | null>(null);
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [addMemberForm, setAddMemberForm] = useState({ userId: "", role: "member" });
 
   const { data: group, isLoading: gLoading } = useQuery<Group>({ queryKey: ["/api/groups", groupId] });
   const { data: members = [], isLoading: mLoading } = useQuery<MemberWithUser[]>({ queryKey: ["/api/groups", groupId, "members"] });
   const { data: meetings = [], isLoading: mtgLoading } = useQuery<Meeting[]>({ queryKey: ["/api/groups", groupId, "meetings"] });
+  const { data: allUsers = [] } = useQuery<User[]>({ queryKey: ["/api/users"] });
 
   const myMembership = members.find(m => m.userId === user?.id);
   const isGroupAdmin = user?.appRole === "app_admin" || myMembership?.role === "group_admin";
@@ -63,6 +66,21 @@ export function GroupDetailPage() {
       apiRequest("PATCH", `/api/groups/${groupId}/members/${uid}/role`, { role }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/groups", groupId, "members"] }); toast({ title: "Role updated" }); },
   });
+
+  const addMemberMutation = useMutation({
+    mutationFn: (data: { userId: number; role: string }) =>
+      apiRequest("POST", `/api/groups/${groupId}/members`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/groups", groupId, "members"] });
+      setAddMemberOpen(false);
+      setAddMemberForm({ userId: "", role: "member" });
+      toast({ title: "Member added" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // Users not already in this group
+  const nonMembers = allUsers.filter(u => !members.some(m => m.userId === u.id));
 
   if (gLoading) return <div className="max-w-4xl mx-auto"><Skeleton className="h-60" /></div>;
   if (!group) return <div className="p-8 text-center text-muted-foreground">Group not found</div>;
@@ -139,6 +157,13 @@ export function GroupDetailPage() {
 
         {/* Members tab */}
         <TabsContent value="members" className="mt-4">
+          {isGroupAdmin && (
+            <div className="flex justify-end mb-3">
+              <Button size="sm" onClick={() => setAddMemberOpen(true)} data-testid="button-add-member">
+                <UserPlus className="h-4 w-4 mr-1" /> Add Existing User
+              </Button>
+            </div>
+          )}
           <div className="space-y-2">
             {mLoading ? (
               [...Array(4)].map((_, i) => <Skeleton key={i} className="h-12" />)
@@ -173,6 +198,57 @@ export function GroupDetailPage() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Add member dialog */}
+      <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add Existing User to Group</DialogTitle></DialogHeader>
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              if (!addMemberForm.userId) return;
+              addMemberMutation.mutate({ userId: Number(addMemberForm.userId), role: addMemberForm.role });
+            }}
+            className="space-y-4 mt-2"
+          >
+            <div className="space-y-1.5">
+              <Label>User *</Label>
+              <Select value={addMemberForm.userId} onValueChange={v => setAddMemberForm(f => ({ ...f, userId: v }))}>
+                <SelectTrigger data-testid="select-add-member-user">
+                  <SelectValue placeholder="Select a user..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {nonMembers.length === 0 ? (
+                    <SelectItem value="none" disabled>All users are already members</SelectItem>
+                  ) : (
+                    nonMembers.map(u => (
+                      <SelectItem key={u.id} value={String(u.id)}>
+                        {u.firstName} {u.lastName} — {u.email}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Role</Label>
+              <Select value={addMemberForm.role} onValueChange={v => setAddMemberForm(f => ({ ...f, role: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="member">Member</SelectItem>
+                  <SelectItem value="group_admin">Group Admin</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setAddMemberOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={addMemberMutation.isPending || !addMemberForm.userId || addMemberForm.userId === "none"}>
+                {addMemberMutation.isPending ? "Adding..." : "Add to Group"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
