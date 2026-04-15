@@ -655,9 +655,17 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (!userId) return;
     const user = storage.getUserById(userId)!;
 
-    const upcoming = storage.getUpcomingMeetingsForUser(userId, 10);
+    const rawUpcoming = user.appRole === "app_admin"
+      ? storage.getUpcomingMeetingsAllGroups(10)
+      : storage.getUpcomingMeetingsForUser(userId, 10);
     const openLeader: any[] = [];
     const openFood: any[] = [];
+
+    // Attach groupName to every meeting for display purposes
+    const upcoming = rawUpcoming.map(meeting => {
+      const group = storage.getGroupById(meeting.groupId);
+      return { ...meeting, groupName: group?.name ?? "" };
+    });
 
     for (const meeting of upcoming) {
       const leader = storage.getLeaderSignupForMeeting(meeting.id);

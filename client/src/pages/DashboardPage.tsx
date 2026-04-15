@@ -7,10 +7,13 @@ import { CalendarDays, Users, Mic2, UtensilsCrossed, ArrowRight, MapPin } from "
 import { format, parseISO } from "date-fns";
 import type { Meeting, Group } from "@/lib/types";
 
+// Dashboard meetings include an extra groupName field injected by the API
+type DashboardMeeting = Meeting & { groupName?: string };
+
 interface DashboardData {
-  upcoming: Meeting[];
-  openLeader: Meeting[];
-  openFood: { meeting: Meeting; openSlots: any[] }[];
+  upcoming: DashboardMeeting[];
+  openLeader: DashboardMeeting[];
+  openFood: { meeting: DashboardMeeting; openSlots: any[] }[];
   groups: Group[];
 }
 
@@ -36,7 +39,9 @@ export function DashboardPage() {
         <h1 className="text-xl font-bold text-foreground">
           Welcome back, {user?.firstName}
         </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Here's what's coming up across your groups.</p>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          {user?.appRole === "app_admin" ? "Here's what's coming up across all groups." : "Here's what's coming up across your groups."}
+        </p>
       </div>
 
       {/* Stat cards */}
@@ -113,6 +118,7 @@ export function DashboardPage() {
                   <span className="flex items-start justify-between gap-2 border rounded-lg p-3 hover:border-primary/50 hover:bg-accent/30 transition-colors cursor-pointer block" data-testid={`meeting-card-${meeting.id}`}>
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">{meeting.title}</p>
+                      {meeting.groupName && <p className="text-xs font-medium text-primary truncate">{meeting.groupName}</p>}
                       <p className="text-xs text-muted-foreground">{fmt(meeting.date, meeting.startTime)}</p>
                       {meeting.location && (
                         <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
@@ -146,6 +152,7 @@ export function DashboardPage() {
                   <span className="flex items-start justify-between gap-2 border rounded-lg p-3 hover:border-primary/50 hover:bg-accent/30 transition-colors cursor-pointer block" data-testid={`leader-slot-${meeting.id}`}>
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">{meeting.title}</p>
+                      {meeting.groupName && <p className="text-xs font-medium text-primary truncate">{meeting.groupName}</p>}
                       <p className="text-xs text-muted-foreground">{fmt(meeting.date, meeting.startTime)}</p>
                     </div>
                     <span className="text-xs px-2 py-0.5 rounded-full shrink-0 bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
@@ -179,6 +186,7 @@ export function DashboardPage() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium">{meeting.title}</p>
+                          {meeting.groupName && <p className="text-xs font-medium text-primary truncate">{meeting.groupName}</p>}
                           <p className="text-xs text-muted-foreground">{fmt(meeting.date, meeting.startTime)}</p>
                         </div>
                         <div className="flex flex-wrap gap-1 justify-end">

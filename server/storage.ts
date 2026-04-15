@@ -151,6 +151,7 @@ export interface IStorage {
   getMeetingById(id: number): Meeting | undefined;
   getMeetingsForGroup(groupId: number): Meeting[];
   getUpcomingMeetingsForUser(userId: number, limit?: number): Meeting[];
+  getUpcomingMeetingsAllGroups(limit?: number): Meeting[];
   createMeeting(data: InsertMeeting): Meeting;
   updateMeeting(id: number, data: Partial<InsertMeeting>): Meeting | undefined;
   deleteMeeting(id: number): void;
@@ -286,6 +287,14 @@ class Storage implements IStorage {
     const today = new Date().toISOString().split("T")[0];
     return db.select().from(meetings)
       .where(and(inArray(meetings.groupId, ids), gte(meetings.date, today)))
+      .orderBy(meetings.date)
+      .limit(limit)
+      .all();
+  }
+  getUpcomingMeetingsAllGroups(limit = 10) {
+    const today = new Date().toISOString().split("T")[0];
+    return db.select().from(meetings)
+      .where(gte(meetings.date, today))
       .orderBy(meetings.date)
       .limit(limit)
       .all();
