@@ -67,6 +67,24 @@ export interface LeaderSignup {
   user?: User;
 }
 
+export interface ResourceLink {
+  id: number;
+  resourceId: number;
+  label: string;
+  url: string;
+  createdAt: string;
+}
+
+export interface Resource {
+  id: number;
+  groupId: number;
+  title: string;
+  description: string | null;
+  createdByUserId: number;
+  createdAt: string;
+  links: ResourceLink[];
+}
+
 export interface FoodSlot {
   id: number;
   meetingId: number;

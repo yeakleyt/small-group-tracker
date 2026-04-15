@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, and, inArray, gte, desc, sql } from "drizzle-orm";
 import {
-  users, groups, groupMemberships, invitations, meetings, leaderSignups, foodSlots,
+  users, groups, groupMemberships, invitations, meetings, leaderSignups, foodSlots, resources, resourceLinks,
   type User, type InsertUser,
   type Group, type InsertGroup,
   type GroupMembership, type InsertGroupMembership,
@@ -10,6 +10,8 @@ import {
   type Meeting, type InsertMeeting,
   type LeaderSignup, type InsertLeaderSignup,
   type FoodSlot, type InsertFoodSlot,
+  type Resource, type InsertResource,
+  type ResourceLink, type InsertResourceLink,
 } from "../shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -93,6 +95,23 @@ sqlite.exec(`
     is_locked INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS resources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id),
+    title TEXT NOT NULL,
+    description TEXT,
+    created_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS resource_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource_id INTEGER NOT NULL REFERENCES resources(id),
+    label TEXT NOT NULL,
+    url TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // ─── Storage interface ──────────────────────────────────────────────────────
@@ -148,6 +167,16 @@ export interface IStorage {
   deleteFoodSlot(id: number): void;
   claimFoodSlot(slotId: number, userId: number): FoodSlot | undefined;
   unclaimFoodSlot(slotId: number): FoodSlot | undefined;
+
+  // Resources
+  getResourcesForGroup(groupId: number): Resource[];
+  getResourceById(id: number): Resource | undefined;
+  createResource(data: InsertResource): Resource;
+  updateResource(id: number, data: Partial<InsertResource>): Resource | undefined;
+  deleteResource(id: number): void;
+  getLinksForResource(resourceId: number): ResourceLink[];
+  createResourceLink(data: InsertResourceLink): ResourceLink;
+  deleteResourceLink(id: number): void;
 }
 
 class Storage implements IStorage {
@@ -303,6 +332,33 @@ class Storage implements IStorage {
   }
   unclaimFoodSlot(slotId: number) {
     return db.update(foodSlots).set({ assignedUserId: null }).where(eq(foodSlots.id, slotId)).returning().get();
+  }
+
+  // ── Resources ─────────────────────────────────────────────────────────────
+  getResourcesForGroup(groupId: number) {
+    return db.select().from(resources).where(eq(resources.groupId, groupId)).all();
+  }
+  getResourceById(id: number) {
+    return db.select().from(resources).where(eq(resources.id, id)).get();
+  }
+  createResource(data: InsertResource) {
+    return db.insert(resources).values(data).returning().get();
+  }
+  updateResource(id: number, data: Partial<InsertResource>) {
+    return db.update(resources).set(data).where(eq(resources.id, id)).returning().get();
+  }
+  deleteResource(id: number) {
+    db.delete(resourceLinks).where(eq(resourceLinks.resourceId, id)).run();
+    db.delete(resources).where(eq(resources.id, id)).run();
+  }
+  getLinksForResource(resourceId: number) {
+    return db.select().from(resourceLinks).where(eq(resourceLinks.resourceId, resourceId)).all();
+  }
+  createResourceLink(data: InsertResourceLink) {
+    return db.insert(resourceLinks).values(data).returning().get();
+  }
+  deleteResourceLink(id: number) {
+    db.delete(resourceLinks).where(eq(resourceLinks.id, id)).run();
   }
 }
 

@@ -15,13 +15,221 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus } from "lucide-react";
+import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus, BookOpen, Link2, Plus, ExternalLink, X } from "lucide-react";
 import { format, parseISO } from "date-fns";
-import type { Group, MemberWithUser, Meeting, User } from "@/lib/types";
+import type { Group, MemberWithUser, Meeting, User, Resource, ResourceLink } from "@/lib/types";
 import { Link } from "wouter";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+// ─── Resource link form row ─────────────────────────────────────────────────
+interface LinkRow { label: string; url: string; }
+
+function LinkFormRow({
+  row,
+  onChange,
+  onRemove,
+}: {
+  row: LinkRow;
+  onChange: (val: LinkRow) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        placeholder="Label (e.g. Amazon)"
+        value={row.label}
+        onChange={e => onChange({ ...row, label: e.target.value })}
+        className="flex-1"
+      />
+      <Input
+        placeholder="https://..."
+        value={row.url}
+        onChange={e => onChange({ ...row, url: e.target.value })}
+        className="flex-[2]"
+      />
+      <Button type="button" size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive shrink-0" onClick={onRemove}>
+        <X className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+}
+
+// ─── Resource card ───────────────────────────────────────────────────────────
+function ResourceCard({
+  resource,
+  isAdmin,
+  groupId,
+  onEdit,
+  onDelete,
+}: {
+  resource: Resource;
+  isAdmin: boolean;
+  groupId: number;
+  onEdit: (r: Resource) => void;
+  onDelete: (r: Resource) => void;
+}) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [addLinkOpen, setAddLinkOpen] = useState(false);
+  const [newLink, setNewLink] = useState<LinkRow>({ label: "", url: "" });
+  const [deleteLinkTarget, setDeleteLinkTarget] = useState<number | null>(null);
+
+  const addLinkMutation = useMutation({
+    mutationFn: (data: LinkRow) =>
+      apiRequest("POST", `/api/resources/${resource.id}/links`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/groups", groupId, "resources"] });
+      setAddLinkOpen(false);
+      setNewLink({ label: "", url: "" });
+      toast({ title: "Link added" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteLinkMutation = useMutation({
+    mutationFn: (linkId: number) =>
+      apiRequest("DELETE", `/api/resource-links/${linkId}`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/groups", groupId, "resources"] });
+      setDeleteLinkTarget(null);
+      toast({ title: "Link removed" });
+    },
+  });
+
+  return (
+    <div className="border rounded-lg bg-card p-4 space-y-3">
+      {/* Title row */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2 min-w-0">
+          <BookOpen className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-snug">{resource.title}</p>
+            {resource.description && (
+              <p className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap">{resource.description}</p>
+            )}
+          </div>
+        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-1 shrink-0">
+            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => onEdit(resource)}>
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => onDelete(resource)}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Links list */}
+      {resource.links.length > 0 && (
+        <div className="space-y-1.5 pl-6">
+          {resource.links.map(link => (
+            <div key={link.id} className="flex items-center gap-2 group">
+              <Link2 className="h-3 w-3 text-muted-foreground shrink-0" />
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-primary underline-offset-2 hover:underline flex items-center gap-1 truncate"
+              >
+                {link.label || link.url}
+                <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+              </a>
+              {isAdmin && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-5 w-5 p-0 text-destructive opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-auto"
+                  onClick={() => setDeleteLinkTarget(link.id)}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add link button */}
+      {isAdmin && (
+        <div className="pl-6">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 text-xs text-muted-foreground hover:text-foreground px-2"
+            onClick={() => setAddLinkOpen(true)}
+          >
+            <Plus className="h-3 w-3 mr-1" /> Add Link
+          </Button>
+        </div>
+      )}
+
+      {/* Add link dialog */}
+      <Dialog open={addLinkOpen} onOpenChange={setAddLinkOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add Link to "{resource.title}"</DialogTitle></DialogHeader>
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              if (!newLink.url) return;
+              addLinkMutation.mutate(newLink);
+            }}
+            className="space-y-4 mt-2"
+          >
+            <div className="space-y-1.5">
+              <Label>Label <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Input
+                placeholder="e.g. Amazon, Publisher, YouTube"
+                value={newLink.label}
+                onChange={e => setNewLink(l => ({ ...l, label: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>URL *</Label>
+              <Input
+                placeholder="https://..."
+                type="url"
+                value={newLink.url}
+                onChange={e => setNewLink(l => ({ ...l, url: e.target.value }))}
+                required
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setAddLinkOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={addLinkMutation.isPending || !newLink.url}>
+                {addLinkMutation.isPending ? "Saving..." : "Add Link"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete link confirmation */}
+      <AlertDialog open={deleteLinkTarget !== null} onOpenChange={o => !o && setDeleteLinkTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Link?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently remove the link from this resource.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+              onClick={() => deleteLinkTarget !== null && deleteLinkMutation.mutate(deleteLinkTarget)}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// ─── Main page ───────────────────────────────────────────────────────────────
 export function GroupDetailPage() {
   const [, params] = useRoute("/groups/:id");
   const groupId = Number(params?.id);
@@ -30,6 +238,7 @@ export function GroupDetailPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
 
+  // Group/member/meeting state
   const [editOpen, setEditOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [editForm, setEditForm] = useState<Partial<Group>>({});
@@ -37,14 +246,27 @@ export function GroupDetailPage() {
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [addMemberForm, setAddMemberForm] = useState({ userId: "", role: "member" });
 
+  // Resource state
+  const [addResourceOpen, setAddResourceOpen] = useState(false);
+  const [editResourceOpen, setEditResourceOpen] = useState(false);
+  const [deleteResourceTarget, setDeleteResourceTarget] = useState<Resource | null>(null);
+  const [resourceForm, setResourceForm] = useState<{ title: string; description: string; links: LinkRow[] }>({
+    title: "", description: "", links: [],
+  });
+  const [editResourceForm, setEditResourceForm] = useState<{ id: number; title: string; description: string }>({
+    id: 0, title: "", description: "",
+  });
+
   const { data: group, isLoading: gLoading } = useQuery<Group>({ queryKey: ["/api/groups", groupId] });
   const { data: members = [], isLoading: mLoading } = useQuery<MemberWithUser[]>({ queryKey: ["/api/groups", groupId, "members"] });
   const { data: meetings = [], isLoading: mtgLoading } = useQuery<Meeting[]>({ queryKey: ["/api/groups", groupId, "meetings"] });
+  const { data: resources = [], isLoading: resLoading } = useQuery<Resource[]>({ queryKey: ["/api/groups", groupId, "resources"] });
   const { data: allUsers = [] } = useQuery<User[]>({ queryKey: ["/api/users"] });
 
   const myMembership = members.find(m => m.userId === user?.id);
   const isGroupAdmin = user?.appRole === "app_admin" || myMembership?.role === "group_admin";
 
+  // ── Group mutations ────────────────────────────────────────────────────────
   const updateMutation = useMutation({
     mutationFn: (data: Partial<Group>) => apiRequest("PATCH", `/api/groups/${groupId}`, data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/groups", groupId] }); setEditOpen(false); toast({ title: "Group updated" }); },
@@ -79,8 +301,58 @@ export function GroupDetailPage() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  // Users not already in this group
+  // ── Resource mutations ─────────────────────────────────────────────────────
+  const addResourceMutation = useMutation({
+    mutationFn: (data: { title: string; description: string; links: LinkRow[] }) =>
+      apiRequest("POST", `/api/groups/${groupId}/resources`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/groups", groupId, "resources"] });
+      setAddResourceOpen(false);
+      setResourceForm({ title: "", description: "", links: [] });
+      toast({ title: "Resource added" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const editResourceMutation = useMutation({
+    mutationFn: ({ id, ...data }: { id: number; title: string; description: string }) =>
+      apiRequest("PATCH", `/api/resources/${id}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/groups", groupId, "resources"] });
+      setEditResourceOpen(false);
+      toast({ title: "Resource updated" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteResourceMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/resources/${id}`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/groups", groupId, "resources"] });
+      setDeleteResourceTarget(null);
+      toast({ title: "Resource deleted" });
+    },
+  });
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
   const nonMembers = allUsers.filter(u => !members.some(m => m.userId === u.id));
+
+  function openEditResource(r: Resource) {
+    setEditResourceForm({ id: r.id, title: r.title, description: r.description ?? "" });
+    setEditResourceOpen(true);
+  }
+
+  function addLinkRow() {
+    setResourceForm(f => ({ ...f, links: [...f.links, { label: "", url: "" }] }));
+  }
+
+  function updateLinkRow(idx: number, val: LinkRow) {
+    setResourceForm(f => ({ ...f, links: f.links.map((l, i) => i === idx ? val : l) }));
+  }
+
+  function removeLinkRow(idx: number) {
+    setResourceForm(f => ({ ...f, links: f.links.filter((_, i) => i !== idx) }));
+  }
 
   if (gLoading) return <div className="max-w-4xl mx-auto"><Skeleton className="h-60" /></div>;
   if (!group) return <div className="p-8 text-center text-muted-foreground">Group not found</div>;
@@ -125,6 +397,7 @@ export function GroupDetailPage() {
         <TabsList>
           <TabsTrigger value="meetings">Meetings</TabsTrigger>
           <TabsTrigger value="members">Members ({members.length})</TabsTrigger>
+          <TabsTrigger value="resources">Resources {resources.length > 0 ? `(${resources.length})` : ""}</TabsTrigger>
         </TabsList>
 
         {/* Meetings tab */}
@@ -197,9 +470,173 @@ export function GroupDetailPage() {
             ))}
           </div>
         </TabsContent>
+
+        {/* Resources tab */}
+        <TabsContent value="resources" className="mt-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Resources</h2>
+            {isGroupAdmin && (
+              <Button size="sm" onClick={() => { setResourceForm({ title: "", description: "", links: [] }); setAddResourceOpen(true); }}>
+                <Plus className="h-4 w-4 mr-1" /> Add Resource
+              </Button>
+            )}
+          </div>
+          {resLoading ? (
+            <div className="space-y-3">
+              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20" />)}
+            </div>
+          ) : resources.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground border rounded-lg">
+              <BookOpen className="h-8 w-8 mx-auto mb-2 opacity-30" />
+              <p>No resources yet.</p>
+              {isGroupAdmin && <p className="text-xs mt-1">Click "Add Resource" to add books, studies, or links for the group.</p>}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {resources.map(r => (
+                <ResourceCard
+                  key={r.id}
+                  resource={r}
+                  isAdmin={isGroupAdmin}
+                  groupId={groupId}
+                  onEdit={openEditResource}
+                  onDelete={res => setDeleteResourceTarget(res)}
+                />
+              ))}
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
 
-      {/* Add member dialog */}
+      {/* ── Add Resource dialog ── */}
+      <Dialog open={addResourceOpen} onOpenChange={setAddResourceOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Add Resource</DialogTitle></DialogHeader>
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              if (!resourceForm.title.trim()) return;
+              addResourceMutation.mutate({
+                title: resourceForm.title.trim(),
+                description: resourceForm.description.trim(),
+                links: resourceForm.links.filter(l => l.url.trim()),
+              });
+            }}
+            className="space-y-4 mt-2"
+          >
+            <div className="space-y-1.5">
+              <Label>Title *</Label>
+              <Input
+                placeholder="e.g. The Purpose Driven Life"
+                value={resourceForm.title}
+                onChange={e => setResourceForm(f => ({ ...f, title: e.target.value }))}
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Description <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Textarea
+                placeholder="Brief description or notes about this resource..."
+                value={resourceForm.description}
+                onChange={e => setResourceForm(f => ({ ...f, description: e.target.value }))}
+                rows={3}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Links <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Button type="button" size="sm" variant="ghost" className="h-7 text-xs px-2" onClick={addLinkRow}>
+                  <Plus className="h-3 w-3 mr-1" /> Add Link
+                </Button>
+              </div>
+              {resourceForm.links.length > 0 && (
+                <div className="space-y-2">
+                  {resourceForm.links.map((row, idx) => (
+                    <LinkFormRow
+                      key={idx}
+                      row={row}
+                      onChange={val => updateLinkRow(idx, val)}
+                      onRemove={() => removeLinkRow(idx)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setAddResourceOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={addResourceMutation.isPending || !resourceForm.title.trim()}>
+                {addResourceMutation.isPending ? "Saving..." : "Add Resource"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit Resource dialog ── */}
+      <Dialog open={editResourceOpen} onOpenChange={setEditResourceOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Edit Resource</DialogTitle></DialogHeader>
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              if (!editResourceForm.title.trim()) return;
+              editResourceMutation.mutate({
+                id: editResourceForm.id,
+                title: editResourceForm.title.trim(),
+                description: editResourceForm.description.trim(),
+              });
+            }}
+            className="space-y-4 mt-2"
+          >
+            <div className="space-y-1.5">
+              <Label>Title *</Label>
+              <Input
+                value={editResourceForm.title}
+                onChange={e => setEditResourceForm(f => ({ ...f, title: e.target.value }))}
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Description</Label>
+              <Textarea
+                value={editResourceForm.description}
+                onChange={e => setEditResourceForm(f => ({ ...f, description: e.target.value }))}
+                rows={3}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">To add or remove links, use the Add Link / remove buttons on the resource card directly.</p>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setEditResourceOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={editResourceMutation.isPending}>
+                {editResourceMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Delete Resource confirmation ── */}
+      <AlertDialog open={deleteResourceTarget !== null} onOpenChange={o => !o && setDeleteResourceTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Resource?</AlertDialogTitle>
+            <AlertDialogDescription>
+              "{deleteResourceTarget?.title}" and all its links will be permanently deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+              onClick={() => deleteResourceTarget && deleteResourceMutation.mutate(deleteResourceTarget.id)}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Add member dialog ── */}
       <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Add Existing User to Group</DialogTitle></DialogHeader>
@@ -250,7 +687,7 @@ export function GroupDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit dialog */}
+      {/* ── Edit Group dialog ── */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Edit Group</DialogTitle></DialogHeader>
@@ -282,7 +719,7 @@ export function GroupDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirmation */}
+      {/* ── Delete Group confirmation ── */}
       <AlertDialog open={deleteConfirm} onOpenChange={setDeleteConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -296,7 +733,7 @@ export function GroupDetailPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Remove member confirmation */}
+      {/* ── Remove Member confirmation ── */}
       <AlertDialog open={removeTarget !== null} onOpenChange={o => !o && setRemoveTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>Remove Member?</AlertDialogTitle></AlertDialogHeader>

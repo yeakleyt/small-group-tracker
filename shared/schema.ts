@@ -117,3 +117,30 @@ export const foodSlots = sqliteTable("food_slots", {
 export const insertFoodSlotSchema = createInsertSchema(foodSlots).omit({ id: true, createdAt: true });
 export type InsertFoodSlot = z.infer<typeof insertFoodSlotSchema>;
 export type FoodSlot = typeof foodSlots.$inferSelect;
+
+// ─── Group Resources ───────────────────────────────────────────────────────────
+
+export const resources = sqliteTable("resources", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  groupId: integer("group_id").notNull().references(() => groups.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => users.id),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+
+export const insertResourceSchema = createInsertSchema(resources).omit({ id: true, createdAt: true });
+export type InsertResource = z.infer<typeof insertResourceSchema>;
+export type Resource = typeof resources.$inferSelect;
+
+export const resourceLinks = sqliteTable("resource_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  resourceId: integer("resource_id").notNull().references(() => resources.id),
+  label: text("label").notNull(),   // e.g. "Chapter 1 PDF", "Amazon link"
+  url: text("url").notNull(),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+
+export const insertResourceLinkSchema = createInsertSchema(resourceLinks).omit({ id: true, createdAt: true });
+export type InsertResourceLink = z.infer<typeof insertResourceLinkSchema>;
+export type ResourceLink = typeof resourceLinks.$inferSelect;

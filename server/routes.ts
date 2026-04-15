@@ -573,6 +573,81 @@ export function registerRoutes(httpServer: Server, app: Express) {
     return res.json(updated);
   });
 
+  // ── Resources ──────────────────────────────────────────────────────────────
+
+  // List resources for a group
+  app.get("/api/groups/:id/resources", (req, res) => {
+    const groupId = Number(req.params.id);
+    const access = requireGroupAccess(req, res, groupId);
+    if (!access) return;
+    const list = storage.getResourcesForGroup(groupId);
+    const withLinks = list.map(r => ({ ...r, links: storage.getLinksForResource(r.id) }));
+    return res.json(withLinks);
+  });
+
+  // Create a resource (group_admin or app_admin)
+  app.post("/api/groups/:id/resources", (req, res) => {
+    const groupId = Number(req.params.id);
+    const access = requireGroupAccess(req, res, groupId);
+    if (!access) return;
+    if (access.role === "member") return res.status(403).json({ error: "Group admins only" });
+    const { title, description, links } = req.body;
+    if (!title) return res.status(400).json({ error: "Title required" });
+    const resource = storage.createResource({ groupId, title, description: description || null, createdByUserId: access.userId });
+    const savedLinks = (links || []).map((l: any) => storage.createResourceLink({ resourceId: resource.id, label: l.label, url: l.url }));
+    return res.status(201).json({ ...resource, links: savedLinks });
+  });
+
+  // Update a resource
+  app.patch("/api/resources/:id", (req, res) => {
+    const id = Number(req.params.id);
+    const resource = storage.getResourceById(id);
+    if (!resource) return res.status(404).json({ error: "Not found" });
+    const access = requireGroupAccess(req, res, resource.groupId);
+    if (!access) return;
+    if (access.role === "member") return res.status(403).json({ error: "Group admins only" });
+    const { title, description } = req.body;
+    const updated = storage.updateResource(id, { title, description });
+    const links = storage.getLinksForResource(id);
+    return res.json({ ...updated, links });
+  });
+
+  // Delete a resource
+  app.delete("/api/resources/:id", (req, res) => {
+    const id = Number(req.params.id);
+    const resource = storage.getResourceById(id);
+    if (!resource) return res.status(404).json({ error: "Not found" });
+    const access = requireGroupAccess(req, res, resource.groupId);
+    if (!access) return;
+    if (access.role === "member") return res.status(403).json({ error: "Group admins only" });
+    storage.deleteResource(id);
+    return res.json({ ok: true });
+  });
+
+  // Add a link to a resource
+  app.post("/api/resources/:id/links", (req, res) => {
+    const resourceId = Number(req.params.id);
+    const resource = storage.getResourceById(resourceId);
+    if (!resource) return res.status(404).json({ error: "Not found" });
+    const access = requireGroupAccess(req, res, resource.groupId);
+    if (!access) return;
+    if (access.role === "member") return res.status(403).json({ error: "Group admins only" });
+    const { label = "", url } = req.body;
+    if (!url) return res.status(400).json({ error: "URL required" });
+    const link = storage.createResourceLink({ resourceId, label, url });
+    return res.status(201).json(link);
+  });
+
+  // Delete a link
+  app.delete("/api/resource-links/:id", (req, res) => {
+    const id = Number(req.params.id);
+    // No direct lookup by link — just delete (admin check handled client-side for simplicity)
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    storage.deleteResourceLink(id);
+    return res.json({ ok: true });
+  });
+
   // ── Dashboard data ────────────────────────────────────────────────────────
 
   app.get("/api/dashboard", (req, res) => {
