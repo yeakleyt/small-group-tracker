@@ -5,6 +5,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { seedAdminIfNeeded } from "./storage";
+import { startReminderScheduler } from "./reminders";
 
 const app = express();
 const httpServer = createServer(app);
@@ -85,6 +86,11 @@ app.use((req, res, next) => {
 (async () => {
   await seedAdminIfNeeded();
   await registerRoutes(httpServer, app);
+
+  // Start daily email reminder scheduler (only runs if RESEND_API_KEY is set)
+  if (process.env.NODE_ENV === "production") {
+    startReminderScheduler();
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
