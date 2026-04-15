@@ -100,3 +100,13 @@ export interface MeetingDetail {
   leader: LeaderSignup | null;
   foodSlots: FoodSlot[];
 }
+
+export interface ChatMessage {
+  id: number;
+  groupId: number;
+  userId: number;
+  message: string;
+  createdAt: string;
+  firstName: string;
+  lastName: string;
+}

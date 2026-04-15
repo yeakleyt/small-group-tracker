@@ -144,3 +144,17 @@ export const resourceLinks = sqliteTable("resource_links", {
 export const insertResourceLinkSchema = createInsertSchema(resourceLinks).omit({ id: true, createdAt: true });
 export type InsertResourceLink = z.infer<typeof insertResourceLinkSchema>;
 export type ResourceLink = typeof resourceLinks.$inferSelect;
+
+// ─── Group Chat ────────────────────────────────────────────────────────────────
+
+export const chatMessages = sqliteTable("chat_messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  groupId: integer("group_id").notNull().references(() => groups.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  message: text("message").notNull(),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+
+export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
+export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
+export type ChatMessage = typeof chatMessages.$inferSelect;

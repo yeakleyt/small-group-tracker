@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
@@ -15,9 +15,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus, BookOpen, Link2, Plus, ExternalLink, X } from "lucide-react";
+import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus, BookOpen, Link2, Plus, ExternalLink, X, Send, MessageSquare } from "lucide-react";
 import { format, parseISO } from "date-fns";
-import type { Group, MemberWithUser, Meeting, User, Resource, ResourceLink } from "@/lib/types";
+import type { Group, MemberWithUser, Meeting, User, Resource, ResourceLink, ChatMessage } from "@/lib/types";
 import { Link } from "wouter";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -229,6 +229,195 @@ function ResourceCard({
   );
 }
 
+// ─── Chat tab ────────────────────────────────────────────────────────────────
+function ChatTab({ groupId, currentUserId, isAdmin }: { groupId: number; currentUserId: number; isAdmin: boolean }) {
+  const { toast } = useToast();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Load history once on mount
+  useEffect(() => {
+    fetch(`/api/groups/${groupId}/chat`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : [])
+      .then((data: ChatMessage[]) => setMessages(data))
+      .catch(() => {});
+  }, [groupId]);
+
+  // SSE subscription for real-time new messages
+  useEffect(() => {
+    const es = new EventSource(`/api/groups/${groupId}/chat/stream`, { withCredentials: true });
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "delete") {
+          setMessages(prev => prev.filter(m => m.id !== data.id));
+        } else {
+          setMessages(prev => {
+            // Avoid duplicate if we already added it optimistically
+            if (prev.some(m => m.id === data.id)) return prev;
+            return [...prev, data];
+          });
+        }
+      } catch {}
+    };
+    es.onerror = () => {}; // silent — will reconnect automatically
+    return () => es.close();
+  }, [groupId]);
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function sendMessage(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    setSending(true);
+    setInput("");
+    try {
+      const res = await fetch(`/api/groups/${groupId}/chat`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+      if (res.ok) {
+        const saved: ChatMessage = await res.json();
+        // Add optimistically (SSE will also arrive but we dedup)
+        setMessages(prev => prev.some(m => m.id === saved.id) ? prev : [...prev, saved]);
+      }
+    } catch {
+      toast({ title: "Failed to send", variant: "destructive" });
+      setInput(text); // restore
+    } finally {
+      setSending(false);
+      inputRef.current?.focus();
+    }
+  }
+
+  async function deleteMessage(id: number) {
+    await fetch(`/api/chat/${id}`, { method: "DELETE", credentials: "include" });
+    setMessages(prev => prev.filter(m => m.id !== id));
+    setDeleteTarget(null);
+  }
+
+  function formatTime(ts: string) {
+    try {
+      const d = new Date(ts);
+      const today = new Date();
+      const isToday = d.toDateString() === today.toDateString();
+      return isToday
+        ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    } catch { return ""; }
+  }
+
+  return (
+    <div className="flex flex-col h-[520px]">
+      {/* Message list */}
+      <div className="flex-1 overflow-y-auto space-y-3 pr-1 pb-2">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-center text-sm text-muted-foreground">
+            <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
+            <p>No messages yet.</p>
+            <p className="text-xs mt-1">Be the first to say something to the group.</p>
+          </div>
+        )}
+        {messages.map((msg) => {
+          const isOwn = msg.userId === currentUserId;
+          const canDelete = isOwn || isAdmin;
+          return (
+            <div key={msg.id} className={`flex gap-2 group ${isOwn ? "flex-row-reverse" : ""}`}>
+              {/* Avatar */}
+              <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-semibold text-primary shrink-0 mt-0.5">
+                {msg.firstName[0]}{msg.lastName[0]}
+              </div>
+              <div className={`max-w-[75%] ${isOwn ? "items-end" : "items-start"} flex flex-col`}>
+                {/* Name + time */}
+                <div className={`flex items-baseline gap-1.5 mb-0.5 ${isOwn ? "flex-row-reverse" : ""}`}>
+                  <span className="text-[11px] font-semibold">{msg.firstName} {msg.lastName}</span>
+                  <span className="text-[10px] text-muted-foreground">{formatTime(msg.createdAt)}</span>
+                </div>
+                {/* Bubble */}
+                <div className="flex items-end gap-1">
+                  {canDelete && !isOwn && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 w-5 p-0 text-destructive opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                      onClick={() => setDeleteTarget(msg.id)}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  )}
+                  <div className={`rounded-2xl px-3 py-1.5 text-sm leading-snug break-words ${
+                    isOwn
+                      ? "bg-primary text-primary-foreground rounded-tr-sm"
+                      : "bg-muted rounded-tl-sm"
+                  }`}>
+                    {msg.message}
+                  </div>
+                  {canDelete && isOwn && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 w-5 p-0 text-destructive opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                      onClick={() => setDeleteTarget(msg.id)}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input bar */}
+      <form onSubmit={sendMessage} className="flex gap-2 pt-3 border-t mt-2">
+        <Input
+          ref={inputRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="Type a message..."
+          className="flex-1"
+          disabled={sending}
+          autoComplete="off"
+        />
+        <Button type="submit" size="sm" disabled={sending || !input.trim()} className="shrink-0">
+          <Send className="h-4 w-4" />
+        </Button>
+      </form>
+
+      {/* Delete confirmation */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={o => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete message?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently remove the message for everyone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+              onClick={() => deleteTarget !== null && deleteMessage(deleteTarget)}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
 // ─── Main page ───────────────────────────────────────────────────────────────
 export function GroupDetailPage() {
   const [, params] = useRoute("/groups/:id");
@@ -398,6 +587,7 @@ export function GroupDetailPage() {
           <TabsTrigger value="meetings">Meetings</TabsTrigger>
           <TabsTrigger value="members">Members ({members.length})</TabsTrigger>
           <TabsTrigger value="resources">Resources {resources.length > 0 ? `(${resources.length})` : ""}</TabsTrigger>
+          <TabsTrigger value="chat">Chat</TabsTrigger>
         </TabsList>
 
         {/* Meetings tab */}
@@ -504,6 +694,17 @@ export function GroupDetailPage() {
                 />
               ))}
             </div>
+          )}
+        </TabsContent>
+
+        {/* Chat tab */}
+        <TabsContent value="chat" className="mt-4">
+          {user && (
+            <ChatTab
+              groupId={groupId}
+              currentUserId={user.id}
+              isAdmin={isGroupAdmin}
+            />
           )}
         </TabsContent>
       </Tabs>

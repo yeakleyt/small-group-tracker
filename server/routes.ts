@@ -5,6 +5,26 @@ import { nanoid } from "nanoid";
 import { storage } from "./storage";
 import type { InsertMeeting, InsertGroup, InsertFoodSlot } from "../shared/schema";
 
+// ─── SSE client registry (group chat) ───────────────────────────────────────
+// Maps groupId → Set of SSE response objects
+const sseClients = new Map<number, Set<Response>>();
+
+function addSseClient(groupId: number, res: Response) {
+  if (!sseClients.has(groupId)) sseClients.set(groupId, new Set());
+  sseClients.get(groupId)!.add(res);
+}
+function removeSseClient(groupId: number, res: Response) {
+  sseClients.get(groupId)?.delete(res);
+}
+function broadcastToGroup(groupId: number, data: object) {
+  const clients = sseClients.get(groupId);
+  if (!clients || clients.size === 0) return;
+  const payload = `data: ${JSON.stringify(data)}\n\n`;
+  for (const client of Array.from(clients)) {
+    try { client.write(payload); } catch { /* client disconnected */ }
+  }
+}
+
 // ─── Auth helpers ───────────────────────────────────────────────────────────
 
 function requireAuth(req: Request, res: Response): number | null {
@@ -684,5 +704,85 @@ export function registerRoutes(httpServer: Server, app: Express) {
       : storage.getGroupsForUser(userId);
 
     return res.json({ upcoming: upcoming.slice(0, 5), openLeader: openLeader.slice(0, 5), openFood: openFood.slice(0, 5), groups });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Chat routes
+  // ────────────────────────────────────────────────────────────────────
+
+  // GET /api/groups/:id/chat/stream  — SSE stream of new messages
+  app.get("/api/groups/:id/chat/stream", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const groupId = Number(req.params.id);
+    const access = requireGroupAccess(req, res, groupId);
+    if (!access) return;
+
+    // SSE headers
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering on Render
+    res.flushHeaders();
+
+    // Send a heartbeat comment every 25s to keep the connection alive
+    const heartbeat = setInterval(() => {
+      try { res.write(": heartbeat\n\n"); } catch { clearInterval(heartbeat); }
+    }, 25000);
+
+    addSseClient(groupId, res);
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      removeSseClient(groupId, res);
+    });
+  });
+
+  // GET /api/groups/:id/chat  — fetch recent message history
+  app.get("/api/groups/:id/chat", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const groupId = Number(req.params.id);
+    const access = requireGroupAccess(req, res, groupId);
+    if (!access) return;
+    const messages = storage.getChatMessages(groupId, 100);
+    return res.json(messages);
+  });
+
+  // POST /api/groups/:id/chat  — send a message
+  app.post("/api/groups/:id/chat", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const groupId = Number(req.params.id);
+    const access = requireGroupAccess(req, res, groupId);
+    if (!access) return;
+    const { message } = req.body;
+    if (!message || !String(message).trim()) {
+      return res.status(400).json({ error: "Message required" });
+    }
+    const saved = storage.createChatMessage({ groupId, userId, message: String(message).trim() });
+    const user = storage.getUserById(userId)!;
+    const payload = { ...saved, firstName: user.firstName, lastName: user.lastName };
+    // Broadcast to all SSE listeners on this group
+    broadcastToGroup(groupId, payload);
+    return res.status(201).json(payload);
+  });
+
+  // DELETE /api/chat/:id  — delete own message (admins can delete any)
+  app.delete("/api/chat/:id", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const msgId = Number(req.params.id);
+    const msg = storage.getChatMessageById(msgId);
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+    const user = storage.getUserById(userId)!;
+    const membership = storage.getMembership(userId, msg.groupId);
+    const isAdmin = user.appRole === "app_admin" || membership?.role === "group_admin";
+    if (msg.userId !== userId && !isAdmin) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+    storage.deleteChatMessage(msgId);
+    broadcastToGroup(msg.groupId, { type: "delete", id: msgId });
+    return res.json({ ok: true });
   });
 }

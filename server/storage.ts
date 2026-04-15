@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, and, inArray, gte, desc, sql } from "drizzle-orm";
 import {
-  users, groups, groupMemberships, invitations, meetings, leaderSignups, foodSlots, resources, resourceLinks,
+  users, groups, groupMemberships, invitations, meetings, leaderSignups, foodSlots, resources, resourceLinks, chatMessages,
   type User, type InsertUser,
   type Group, type InsertGroup,
   type GroupMembership, type InsertGroupMembership,
@@ -12,6 +12,7 @@ import {
   type FoodSlot, type InsertFoodSlot,
   type Resource, type InsertResource,
   type ResourceLink, type InsertResourceLink,
+  type ChatMessage, type InsertChatMessage,
 } from "../shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -112,6 +113,14 @@ sqlite.exec(`
     url TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // ─── Storage interface ──────────────────────────────────────────────────────
@@ -178,6 +187,12 @@ export interface IStorage {
   getLinksForResource(resourceId: number): ResourceLink[];
   createResourceLink(data: InsertResourceLink): ResourceLink;
   deleteResourceLink(id: number): void;
+
+  // Chat
+  getChatMessages(groupId: number, limit?: number): (ChatMessage & { firstName: string; lastName: string })[];
+  getChatMessageById(id: number): ChatMessage | undefined;
+  createChatMessage(data: InsertChatMessage): ChatMessage;
+  deleteChatMessage(id: number): void;
 }
 
 class Storage implements IStorage {
@@ -368,6 +383,37 @@ class Storage implements IStorage {
   }
   deleteResourceLink(id: number) {
     db.delete(resourceLinks).where(eq(resourceLinks.id, id)).run();
+  }
+
+  // ── Chat ──────────────────────────────────────────────────────────────────
+  getChatMessages(groupId: number, limit = 100) {
+    // Join with users to get sender name in one query
+    const rows = db
+      .select({
+        id: chatMessages.id,
+        groupId: chatMessages.groupId,
+        userId: chatMessages.userId,
+        message: chatMessages.message,
+        createdAt: chatMessages.createdAt,
+        firstName: users.firstName,
+        lastName: users.lastName,
+      })
+      .from(chatMessages)
+      .innerJoin(users, eq(chatMessages.userId, users.id))
+      .where(eq(chatMessages.groupId, groupId))
+      .orderBy(chatMessages.createdAt)
+      .limit(limit)
+      .all();
+    return rows;
+  }
+  getChatMessageById(id: number) {
+    return db.select().from(chatMessages).where(eq(chatMessages.id, id)).get();
+  }
+  createChatMessage(data: InsertChatMessage) {
+    return db.insert(chatMessages).values({ ...data, createdAt: new Date().toISOString() }).returning().get();
+  }
+  deleteChatMessage(id: number) {
+    db.delete(chatMessages).where(eq(chatMessages.id, id)).run();
   }
 }
 
