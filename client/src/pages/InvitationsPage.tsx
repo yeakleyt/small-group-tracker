@@ -2,16 +2,17 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Mail, Copy, CheckCircle, Clock, AlertCircle, Users } from "lucide-react";
+import { Plus, Mail, Copy, CheckCircle, Clock, AlertCircle, Users, Trash2 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import type { Invitation, Group } from "@/lib/types";
 
@@ -22,15 +23,10 @@ export function InvitationsPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ email: "", groupId: "", groupRole: "member" });
   const [copied, setCopied] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
   const { data: invitations = [], isLoading } = useQuery<Invitation[]>({ queryKey: ["/api/invitations"] });
   const { data: groups = [] } = useQuery<Group[]>({ queryKey: ["/api/groups"] });
-
-  // Filter groups to only ones user admins (or all if app admin)
-  const adminGroups = groups.filter(g => {
-    if (user?.appRole === "app_admin") return true;
-    return false; // group-level filtering done server-side
-  });
 
   const createMutation = useMutation({
     mutationFn: (data: typeof form) => apiRequest("POST", "/api/invitations", {
@@ -43,6 +39,16 @@ export function InvitationsPage() {
       setOpen(false);
       setForm({ email: "", groupId: "", groupRole: "member" });
       toast({ title: "Invitation created", description: "Share the link with the invitee." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/invitations/${id}`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/invitations"] });
+      setDeleteTarget(null);
+      toast({ title: "Invitation removed" });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -96,7 +102,7 @@ export function InvitationsPage() {
                   </SelectContent>
                 </Select>
               </div>
-              {form.groupId && (
+              {form.groupId && form.groupId !== "none" && (
                 <div className="space-y-1.5">
                   <Label>Group Role</Label>
                   <Select value={form.groupRole} onValueChange={v => setForm(f => ({ ...f, groupRole: v }))}>
@@ -113,7 +119,7 @@ export function InvitationsPage() {
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>Send Invitation</Button>
+                <Button type="submit" disabled={createMutation.isPending}>Create Invitation</Button>
               </div>
             </form>
           </DialogContent>
@@ -148,7 +154,7 @@ export function InvitationsPage() {
                       {group ? (
                         <span className="flex items-center gap-1"><Users className="h-3 w-3" />{group.name} · {inv.groupRole}</span>
                       ) : (
-                        <span>App access</span>
+                        <span>App access only</span>
                       )}
                       <span>Expires {format(parseISO(inv.expiresAt), "MMM d, yyyy")}</span>
                     </div>
@@ -163,12 +169,42 @@ export function InvitationsPage() {
                       {copied === inv.id ? <><CheckCircle className="h-3 w-3 text-green-600" />Copied</> : <><Copy className="h-3 w-3" />Copy Link</>}
                     </Button>
                   )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0 text-destructive"
+                    onClick={() => setDeleteTarget(inv.id)}
+                    data-testid={`button-delete-invite-${inv.id}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
               </div>
             );
           })}
         </div>
       )}
+
+      {/* Delete confirmation */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={o => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Invitation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the invitation. The link will no longer work.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+              onClick={() => deleteTarget !== null && deleteMutation.mutate(deleteTarget)}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

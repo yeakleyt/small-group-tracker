@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus, BookOpen, Link2, Plus, ExternalLink, X, Send, MessageSquare, Bell, BellOff } from "lucide-react";
+import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus, BookOpen, Link2, Plus, ExternalLink, X, Send, MessageSquare, Bell, BellOff, Mail, Copy, CheckCircle } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import type { Group, MemberWithUser, Meeting, User, Resource, ResourceLink, ChatMessage } from "@/lib/types";
 import { Link } from "wouter";
@@ -541,6 +541,12 @@ export function GroupDetailPage() {
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [addMemberForm, setAddMemberForm] = useState({ userId: "", role: "member" });
 
+  // Invite state
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ email: "", groupRole: "member" });
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+
   // Resource state
   const [addResourceOpen, setAddResourceOpen] = useState(false);
   const [editResourceOpen, setEditResourceOpen] = useState(false);
@@ -592,6 +598,17 @@ export function GroupDetailPage() {
       setAddMemberOpen(false);
       setAddMemberForm({ userId: "", role: "member" });
       toast({ title: "Member added" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const sendInviteMutation = useMutation({
+    mutationFn: (data: { email: string; groupRole: string }) =>
+      apiRequest("POST", `/api/groups/${groupId}/invitations`, data),
+    onSuccess: (data: any) => {
+      const link = `${window.location.origin}/#/invite/${data.token}`;
+      setInviteLink(link);
+      setInviteForm({ email: "", groupRole: "member" });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -727,7 +744,10 @@ export function GroupDetailPage() {
         {/* Members tab */}
         <TabsContent value="members" className="mt-4">
           {isGroupAdmin && (
-            <div className="flex justify-end mb-3">
+            <div className="flex justify-end gap-2 mb-3">
+              <Button size="sm" variant="outline" onClick={() => { setInviteLink(null); setInviteOpen(true); }} data-testid="button-send-invite">
+                <Mail className="h-4 w-4 mr-1" /> Send Invite
+              </Button>
               <Button size="sm" onClick={() => setAddMemberOpen(true)} data-testid="button-add-member">
                 <UserPlus className="h-4 w-4 mr-1" /> Add Existing User
               </Button>
@@ -942,6 +962,75 @@ export function GroupDetailPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── Send Invite dialog ── */}
+      <Dialog open={inviteOpen} onOpenChange={o => { setInviteOpen(o); if (!o) { setInviteLink(null); setInviteForm({ email: "", groupRole: "member" }); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Send Group Invitation</DialogTitle></DialogHeader>
+          {inviteLink ? (
+            <div className="space-y-4 mt-2">
+              <p className="text-sm text-muted-foreground">Invitation created. Copy the link below and share it with the invitee.</p>
+              <div className="flex gap-2">
+                <Input readOnly value={inviteLink} className="text-xs" />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => {
+                    navigator.clipboard.writeText(inviteLink);
+                    setInviteCopied(true);
+                    setTimeout(() => setInviteCopied(false), 2000);
+                  }}
+                >
+                  {inviteCopied ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={() => { setInviteLink(null); setInviteOpen(false); }}>Done</Button>
+              </div>
+            </div>
+          ) : (
+            <form
+              onSubmit={e => {
+                e.preventDefault();
+                if (!inviteForm.email) return;
+                sendInviteMutation.mutate(inviteForm);
+              }}
+              className="space-y-4 mt-2"
+            >
+              <div className="space-y-1.5">
+                <Label>Email Address *</Label>
+                <Input
+                  type="email"
+                  placeholder="invitee@example.com"
+                  value={inviteForm.email}
+                  onChange={e => setInviteForm(f => ({ ...f, email: e.target.value }))}
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Role</Label>
+                <Select value={inviteForm.groupRole} onValueChange={v => setInviteForm(f => ({ ...f, groupRole: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="member">Member</SelectItem>
+                    <SelectItem value="group_admin">Group Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="bg-muted/50 rounded-md p-3 text-xs text-muted-foreground">
+                The invitation link is valid for 7 days and can only be used once.
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setInviteOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={sendInviteMutation.isPending || !inviteForm.email}>
+                  {sendInviteMutation.isPending ? "Creating..." : "Create Invitation"}
+                </Button>
+              </div>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* ── Add member dialog ── */}
       <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>

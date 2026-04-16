@@ -179,21 +179,56 @@ export function registerRoutes(httpServer: Server, app: Express) {
     return res.json(inv);
   });
 
-  // Get invitations (app admin sees all, group admin sees their groups)
+  // Get invitations — app admin sees all, others see only ones they created
   app.get("/api/invitations", (req, res) => {
     const userId = requireAuth(req, res);
     if (!userId) return;
     const user = storage.getUserById(userId)!;
-    const invs = storage.getInvitationsCreatedBy(userId);
+    const invs = user.appRole === "app_admin"
+      ? storage.getAllInvitations()
+      : storage.getInvitationsCreatedBy(userId);
     return res.json(invs);
   });
 
+  // Delete an invitation (app admin can delete any; creator can delete their own)
   app.delete("/api/invitations/:id", (req, res) => {
-    const userId = requireAppAdmin(req, res);
+    const userId = requireAuth(req, res);
     if (!userId) return;
-    // Allow deletion by marking used
-    storage.markInvitationUsed(Number(req.params.id));
+    const user = storage.getUserById(userId)!;
+    const id = Number(req.params.id);
+    // Only app admins or the creator can delete
+    const all = storage.getAllInvitations();
+    const inv = all.find(i => i.id === id);
+    if (!inv) return res.status(404).json({ error: "Not found" });
+    if (user.appRole !== "app_admin" && inv.invitedByUserId !== userId) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+    storage.deleteInvitation(id);
     return res.json({ ok: true });
+  });
+
+  // Create invitation from group page (group admin or app admin)
+  app.post("/api/groups/:id/invitations", async (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const groupId = Number(req.params.id);
+    const access = requireGroupAccess(req, res, groupId);
+    if (!access) return;
+    if (access.role === "member") return res.status(403).json({ error: "Group admins only" });
+    const user = storage.getUserById(userId)!;
+    const { email, groupRole = "member" } = req.body;
+    if (!email) return res.status(400).json({ error: "Email required" });
+    const token = nanoid(32);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const inv = storage.createInvitation({
+      email,
+      token,
+      groupId,
+      groupRole,
+      invitedByUserId: userId,
+      expiresAt,
+    });
+    return res.status(201).json(inv);
   });
 
   // Get invitation details by token (public)

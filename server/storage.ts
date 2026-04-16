@@ -161,10 +161,12 @@ export interface IStorage {
 
   // Invitations
   getInvitationByToken(token: string): Invitation | undefined;
+  getAllInvitations(): Invitation[];
   getInvitationsCreatedBy(userId: number): Invitation[];
   getInvitationsForGroup(groupId: number): Invitation[];
   createInvitation(data: InsertInvitation): Invitation;
   markInvitationUsed(id: number): void;
+  deleteInvitation(id: number): void;
 
   // Meetings
   getMeetingById(id: number): Meeting | undefined;
@@ -297,8 +299,14 @@ class Storage implements IStorage {
   createInvitation(data: InsertInvitation) {
     return db.insert(invitations).values(data).returning().get();
   }
+  getAllInvitations() {
+    return db.select().from(invitations).orderBy(desc(invitations.createdAt)).all();
+  }
   markInvitationUsed(id: number) {
     db.update(invitations).set({ isUsed: true, usedAt: new Date().toISOString() }).where(eq(invitations.id, id)).run();
+  }
+  deleteInvitation(id: number) {
+    db.delete(invitations).where(eq(invitations.id, id)).run();
   }
 
   // ── Meetings ──────────────────────────────────────────────────────────────
