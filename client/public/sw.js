@@ -1,5 +1,5 @@
 // Small Group Manager — Service Worker
-const CACHE_NAME = "sgm-v6";
+const CACHE_NAME = "sgm-v8";
 
 // On install — cache the app shell
 self.addEventListener("install", event => {
