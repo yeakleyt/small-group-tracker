@@ -1,5 +1,5 @@
 // Small Group Manager — Service Worker
-const CACHE_NAME = "sgm-v4";
+const CACHE_NAME = "sgm-v6";
 
 // On install — cache the app shell
 self.addEventListener("install", event => {
@@ -47,5 +47,53 @@ self.addEventListener("fetch", event => {
         return response;
       })
       .catch(() => caches.match(request))
+  );
+});
+
+// ─── Push notifications ───────────────────────────────────────────────────────
+
+self.addEventListener("push", event => {
+  if (!event.data) return;
+
+  let data = {};
+  try { data = event.data.json(); } catch { return; }
+
+  const title = data.title || "Small Group Manager";
+  const body  = data.body  || "You have a new message.";
+  const groupId = data.groupId;
+
+  const options = {
+    body,
+    icon: "/icons/icon-192.png",
+    badge: "/icons/icon-192.png",
+    tag: `chat-${groupId}`,       // groups notifications per group (replaces previous)
+    renotify: true,               // still vibrate/sound even if replacing same tag
+    data: { groupId },
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+  );
+});
+
+// When the user taps the notification — open the app to that group's chat tab
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+  const groupId = event.notification.data?.groupId;
+  const url = groupId ? `/#/groups/${groupId}` : "/";
+
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then(windowClients => {
+      // If app is already open, focus it and navigate
+      for (const client of windowClients) {
+        if ("focus" in client) {
+          client.focus();
+          if ("navigate" in client) client.navigate(url);
+          return;
+        }
+      }
+      // Otherwise open a new window
+      if (clients.openWindow) return clients.openWindow(url);
+    })
   );
 });

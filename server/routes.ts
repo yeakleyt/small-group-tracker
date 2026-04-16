@@ -2,8 +2,37 @@ import type { Express, Request, Response } from "express";
 import type { Server } from "http";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
+import webpush from "web-push";
 import { storage } from "./storage";
 import type { InsertMeeting, InsertGroup, InsertFoodSlot } from "../shared/schema";
+
+// ─── Web Push (VAPID) setup ─────────────────────────────────────────────────
+// VAPID keys are generated once and stored as env vars.
+// Generate with: node -e "const wp=require('web-push'); const k=wp.generateVAPIDKeys(); console.log(JSON.stringify(k,null,2);"
+const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  ?? "";
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY ?? "";
+const VAPID_EMAIL   = process.env.VAPID_EMAIL       ?? "mailto:admin@example.com";
+
+if (VAPID_PUBLIC && VAPID_PRIVATE) {
+  webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE);
+}
+
+async function sendPushToUsers(userIds: number[], payload: object): Promise<void> {
+  if (!VAPID_PUBLIC || !VAPID_PRIVATE) return;
+  const subs = storage.getPushSubscriptionsForUsers(userIds);
+  const json = JSON.stringify(payload);
+  await Promise.allSettled(
+    subs.map(sub =>
+      webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        json,
+      ).catch(err => {
+        // 410 Gone = subscription expired/revoked — clean it up
+        if (err.statusCode === 410) storage.deletePushSubscription(sub.endpoint);
+      })
+    )
+  );
+}
 
 // ─── SSE client registry (group chat) ───────────────────────────────────────
 // Maps groupId → Set of SSE response objects
@@ -765,7 +794,49 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const payload = { ...saved, firstName: user.firstName, lastName: user.lastName };
     // Broadcast to all SSE listeners on this group
     broadcastToGroup(groupId, payload);
+    // Send push notifications to all other group members
+    const members = storage.getMembershipsForGroup(groupId);
+    const otherUserIds = members.map(m => m.userId).filter(id => id !== userId);
+    const group = storage.getGroupById(groupId);
+    sendPushToUsers(otherUserIds, {
+      type: "chat",
+      title: group?.name ?? "Group Chat",
+      body: `${user.firstName} ${user.lastName}: ${String(message).trim().slice(0, 100)}`,
+      groupId,
+    }).catch(() => {});
     return res.status(201).json(payload);
+  });
+
+  // GET /api/push/vapid-public-key  — sends public key to client for subscription
+  app.get("/api/push/vapid-public-key", (req, res) => {
+    if (!VAPID_PUBLIC) return res.status(503).json({ error: "Push not configured" });
+    return res.json({ key: VAPID_PUBLIC });
+  });
+
+  // POST /api/push/subscribe  — save a push subscription for the current user
+  app.post("/api/push/subscribe", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const { endpoint, keys } = req.body;
+    if (!endpoint || !keys?.p256dh || !keys?.auth) {
+      return res.status(400).json({ error: "Invalid subscription" });
+    }
+    const sub = storage.savePushSubscription({
+      userId,
+      endpoint,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+    });
+    return res.status(201).json({ ok: true });
+  });
+
+  // DELETE /api/push/subscribe  — remove a push subscription
+  app.delete("/api/push/subscribe", (req, res) => {
+    const userId = requireAuth(req, res);
+    if (!userId) return;
+    const { endpoint } = req.body;
+    if (endpoint) storage.deletePushSubscription(endpoint);
+    return res.json({ ok: true });
   });
 
   // DELETE /api/chat/:id  — delete own message (admins can delete any)

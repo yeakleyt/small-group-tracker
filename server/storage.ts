@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, and, inArray, gte, desc, sql } from "drizzle-orm";
 import {
-  users, groups, groupMemberships, invitations, meetings, leaderSignups, foodSlots, resources, resourceLinks, chatMessages,
+  users, groups, groupMemberships, invitations, meetings, leaderSignups, foodSlots, resources, resourceLinks, chatMessages, pushSubscriptions,
   type User, type InsertUser,
   type Group, type InsertGroup,
   type GroupMembership, type InsertGroupMembership,
@@ -13,6 +13,7 @@ import {
   type Resource, type InsertResource,
   type ResourceLink, type InsertResourceLink,
   type ChatMessage, type InsertChatMessage,
+  type PushSubscription, type InsertPushSubscription,
 } from "../shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -121,6 +122,15 @@ sqlite.exec(`
     message TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // ─── Storage interface ──────────────────────────────────────────────────────
@@ -193,6 +203,12 @@ export interface IStorage {
   getChatMessageById(id: number): ChatMessage | undefined;
   createChatMessage(data: InsertChatMessage): ChatMessage;
   deleteChatMessage(id: number): void;
+
+  // Push subscriptions
+  savePushSubscription(data: InsertPushSubscription): PushSubscription;
+  deletePushSubscription(endpoint: string): void;
+  getPushSubscriptionsForUsers(userIds: number[]): PushSubscription[];
+  getPushSubscriptionByEndpoint(endpoint: string): PushSubscription | undefined;
 }
 
 class Storage implements IStorage {
@@ -414,6 +430,35 @@ class Storage implements IStorage {
   }
   deleteChatMessage(id: number) {
     db.delete(chatMessages).where(eq(chatMessages.id, id)).run();
+  }
+
+  // ── Push subscriptions ───────────────────────────────────────────────────────────
+  savePushSubscription(data: InsertPushSubscription) {
+    // Upsert — if endpoint exists update keys, otherwise insert
+    const existing = db.select().from(pushSubscriptions)
+      .where(eq(pushSubscriptions.endpoint, data.endpoint)).get();
+    if (existing) {
+      return db.update(pushSubscriptions)
+        .set({ p256dh: data.p256dh, auth: data.auth })
+        .where(eq(pushSubscriptions.endpoint, data.endpoint))
+        .returning().get();
+    }
+    return db.insert(pushSubscriptions)
+      .values({ ...data, createdAt: new Date().toISOString() })
+      .returning().get();
+  }
+  deletePushSubscription(endpoint: string) {
+    db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, endpoint)).run();
+  }
+  getPushSubscriptionsForUsers(userIds: number[]) {
+    if (!userIds.length) return [];
+    return db.select().from(pushSubscriptions)
+      .where(inArray(pushSubscriptions.userId, userIds))
+      .all();
+  }
+  getPushSubscriptionByEndpoint(endpoint: string) {
+    return db.select().from(pushSubscriptions)
+      .where(eq(pushSubscriptions.endpoint, endpoint)).get();
   }
 }
 

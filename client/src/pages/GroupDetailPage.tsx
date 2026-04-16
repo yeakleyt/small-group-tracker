@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus, BookOpen, Link2, Plus, ExternalLink, X, Send, MessageSquare } from "lucide-react";
+import { CalendarDays, MapPin, Users, Pencil, Trash2, UserMinus, Crown, ArrowLeft, UserPlus, BookOpen, Link2, Plus, ExternalLink, X, Send, MessageSquare, Bell, BellOff } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import type { Group, MemberWithUser, Meeting, User, Resource, ResourceLink, ChatMessage } from "@/lib/types";
 import { Link } from "wouter";
@@ -230,6 +230,13 @@ function ResourceCard({
 }
 
 // ─── Chat tab ────────────────────────────────────────────────────────────────
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from(Array.from(rawData).map(c => c.charCodeAt(0)));
+}
+
 function ChatTab({ groupId, currentUserId, isAdmin }: { groupId: number; currentUserId: number; isAdmin: boolean }) {
   const { toast } = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -238,6 +245,78 @@ function ChatTab({ groupId, currentUserId, isAdmin }: { groupId: number; current
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Push notification state
+  const [notifSupported, setNotifSupported] = useState(false);
+  const [notifStatus, setNotifStatus] = useState<"default" | "granted" | "denied">("default");
+  const [notifLoading, setNotifLoading] = useState(false);
+
+  useEffect(() => {
+    // Check if push is supported and read current permission
+    const supported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+    setNotifSupported(supported);
+    if (supported) setNotifStatus(Notification.permission as "default" | "granted" | "denied");
+  }, []);
+
+  async function enableNotifications() {
+    if (!notifSupported) return;
+    setNotifLoading(true);
+    try {
+      // Get VAPID public key
+      const keyRes = await fetch("/api/push/vapid-public-key", { credentials: "include" });
+      if (!keyRes.ok) { toast({ title: "Push not configured on server", variant: "destructive" }); return; }
+      const { key } = await keyRes.json();
+
+      // Request permission
+      const permission = await Notification.requestPermission();
+      setNotifStatus(permission as "default" | "granted" | "denied");
+      if (permission !== "granted") { toast({ title: "Notifications blocked", description: "You can enable them in your browser settings.", variant: "destructive" }); return; }
+
+      // Subscribe via service worker
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key),
+      });
+
+      // Save subscription on server
+      await fetch("/api/push/subscribe", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sub.toJSON()),
+      });
+
+      toast({ title: "Notifications enabled", description: "You'll be notified when new messages are posted." });
+    } catch (e: any) {
+      toast({ title: "Could not enable notifications", description: e.message, variant: "destructive" });
+    } finally {
+      setNotifLoading(false);
+    }
+  }
+
+  async function disableNotifications() {
+    setNotifLoading(true);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetch("/api/push/subscribe", {
+          method: "DELETE",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        });
+        await sub.unsubscribe();
+      }
+      setNotifStatus("default");
+      toast({ title: "Notifications disabled" });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setNotifLoading(false);
+    }
+  }
 
   // Load history once on mount
   useEffect(() => {
@@ -319,6 +398,33 @@ function ChatTab({ groupId, currentUserId, isAdmin }: { groupId: number; current
 
   return (
     <div className="flex flex-col h-[520px]">
+      {/* Notification toggle */}
+      {notifSupported && notifStatus !== "denied" && (
+        <div className="flex justify-end mb-2">
+          {notifStatus === "granted" ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-muted-foreground gap-1"
+              onClick={disableNotifications}
+              disabled={notifLoading}
+            >
+              <BellOff className="h-3.5 w-3.5" /> Notifications on
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-muted-foreground gap-1"
+              onClick={enableNotifications}
+              disabled={notifLoading}
+            >
+              <Bell className="h-3.5 w-3.5" /> Enable notifications
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Message list */}
       <div className="flex-1 overflow-y-auto space-y-3 pr-1 pb-2">
         {messages.length === 0 && (
