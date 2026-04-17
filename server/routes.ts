@@ -128,6 +128,22 @@ export function registerRoutes(httpServer: Server, app: Express) {
     return res.json({ user: safeUser });
   });
 
+  // Admin reset another user's password (app_admin only)
+  app.post("/api/users/:id/reset-password", async (req, res) => {
+    const adminId = requireAppAdmin(req, res);
+    if (!adminId) return;
+    const targetId = Number(req.params.id);
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+    const target = storage.getUserById(targetId);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    const hash = await bcrypt.hash(newPassword, 10);
+    storage.updateUser(targetId, { passwordHash: hash });
+    return res.json({ ok: true });
+  });
+
   // Change own password
   app.post("/api/auth/change-password", async (req, res) => {
     const userId = requireAuth(req, res);

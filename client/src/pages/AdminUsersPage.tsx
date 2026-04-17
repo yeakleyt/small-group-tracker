@@ -9,7 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, Search, UserCheck, UserX } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Shield, Search, UserCheck, UserX, KeyRound } from "lucide-react";
 import type { User } from "@/lib/types";
 
 export function AdminUsersPage() {
@@ -17,6 +19,9 @@ export function AdminUsersPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
+  const [resetTarget, setResetTarget] = useState<User | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [pwError, setPwError] = useState("");
 
   const { data: users = [], isLoading } = useQuery<User[]>({ queryKey: ["/api/users"] });
 
@@ -32,6 +37,33 @@ export function AdminUsersPage() {
       apiRequest("PATCH", `/api/users/${id}/status`, { isActive }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/users"] }); },
   });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: ({ id, password }: { id: number; password: string }) =>
+      apiRequest("POST", `/api/users/${id}/reset-password`, { password }),
+    onSuccess: () => {
+      toast({ title: "Password reset", description: "The user's password has been updated." });
+      setResetTarget(null);
+      setNewPassword("");
+      setPwError("");
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  function openResetDialog(u: User) {
+    setResetTarget(u);
+    setNewPassword("");
+    setPwError("");
+  }
+
+  function handleResetSubmit() {
+    if (newPassword.length < 8) {
+      setPwError("Password must be at least 8 characters.");
+      return;
+    }
+    if (!resetTarget) return;
+    resetPasswordMutation.mutate({ id: resetTarget.id, password: newPassword });
+  }
 
   const filtered = users.filter(u =>
     `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(search.toLowerCase())
@@ -78,6 +110,9 @@ export function AdminUsersPage() {
                         <SelectItem value="app_admin">App Admin</SelectItem>
                       </SelectContent>
                     </Select>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openResetDialog(u)} title="Reset password">
+                      <KeyRound className="h-4 w-4 text-muted-foreground" />
+                    </Button>
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => statusMutation.mutate({ id: u.id, isActive: !u.isActive })} title={u.isActive ? "Deactivate" : "Activate"}>
                       {u.isActive ? <UserX className="h-4 w-4 text-muted-foreground" /> : <UserCheck className="h-4 w-4 text-green-600" />}
                     </Button>
@@ -90,6 +125,41 @@ export function AdminUsersPage() {
           ))}
         </div>
       )}
+
+      {/* Reset Password Dialog */}
+      <Dialog open={!!resetTarget} onOpenChange={open => { if (!open) { setResetTarget(null); setNewPassword(""); setPwError(""); } }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Reset Password</DialogTitle>
+          </DialogHeader>
+          {resetTarget && (
+            <div className="space-y-4 py-2">
+              <p className="text-sm text-muted-foreground">
+                Set a new temporary password for <span className="font-medium text-foreground">{resetTarget.firstName} {resetTarget.lastName}</span>. They should change it after logging in.
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="new-password">New Password</Label>
+                <Input
+                  id="new-password"
+                  type="password"
+                  placeholder="Min. 8 characters"
+                  value={newPassword}
+                  onChange={e => { setNewPassword(e.target.value); setPwError(""); }}
+                  onKeyDown={e => e.key === "Enter" && handleResetSubmit()}
+                  autoFocus
+                />
+                {pwError && <p className="text-xs text-destructive">{pwError}</p>}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setResetTarget(null); setNewPassword(""); setPwError(""); }}>Cancel</Button>
+            <Button onClick={handleResetSubmit} disabled={resetPasswordMutation.isPending}>
+              {resetPasswordMutation.isPending ? "Saving..." : "Set Password"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
