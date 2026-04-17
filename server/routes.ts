@@ -133,13 +133,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const adminId = requireAppAdmin(req, res);
     if (!adminId) return;
     const targetId = Number(req.params.id);
-    const { newPassword } = req.body;
-    if (!newPassword || newPassword.length < 8) {
+    const { password } = req.body;
+    if (!password || password.length < 8) {
       return res.status(400).json({ error: "Password must be at least 8 characters" });
     }
     const target = storage.getUserById(targetId);
     if (!target) return res.status(404).json({ error: "User not found" });
-    const hash = await bcrypt.hash(newPassword, 10);
+    const hash = await bcrypt.hash(password, 10);
     storage.updateUser(targetId, { passwordHash: hash });
     return res.json({ ok: true });
   });
