@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import webpush from "web-push";
 import { storage } from "./storage";
+import { sendEmail, buildInviteEmailHtml } from "./email";
 import type { InsertMeeting, InsertGroup, InsertFoodSlot } from "../shared/schema";
 
 // ─── Web Push (VAPID) setup ─────────────────────────────────────────────────
@@ -176,6 +177,20 @@ export function registerRoutes(httpServer: Server, app: Express) {
       invitedByUserId: userId,
       expiresAt,
     });
+    // Send invite email (non-blocking — don't fail the request if email fails)
+    const inviter = storage.getUserById(userId)!;
+    const inviteGroup = inv.groupId ? storage.getGroupById(inv.groupId) : null;
+    const appUrl = process.env.APP_URL || "https://small-group-manager.onrender.com";
+    const inviteUrl = `${appUrl}/#/invite/${inv.token}`;
+    sendEmail(
+      inv.email,
+      inviteGroup ? `You're invited to join ${inviteGroup.name}` : "You're invited to Small Group Manager",
+      buildInviteEmailHtml({
+        invitedByName: `${inviter.firstName} ${inviter.lastName}`,
+        groupName: inviteGroup?.name ?? null,
+        inviteUrl,
+      })
+    ).catch(() => {});
     return res.json(inv);
   });
 
@@ -228,6 +243,20 @@ export function registerRoutes(httpServer: Server, app: Express) {
       invitedByUserId: userId,
       expiresAt,
     });
+    // Send invite email (non-blocking)
+    const inviter = storage.getUserById(userId)!;
+    const inviteGroup = storage.getGroupById(groupId);
+    const appUrl = process.env.APP_URL || "https://small-group-manager.onrender.com";
+    const inviteUrl = `${appUrl}/#/invite/${inv.token}`;
+    sendEmail(
+      inv.email,
+      `You're invited to join ${inviteGroup?.name ?? "a group"}`,
+      buildInviteEmailHtml({
+        invitedByName: `${inviter.firstName} ${inviter.lastName}`,
+        groupName: inviteGroup?.name ?? null,
+        inviteUrl,
+      })
+    ).catch(() => {});
     return res.status(201).json(inv);
   });
 

@@ -15,34 +15,7 @@
 
 import { storage } from "./storage";
 import { log } from "./index";
-
-// ─── Resend email sender ─────────────────────────────────────────────────────
-
-async function sendEmail(to: string, subject: string, html: string): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM || "Small Group Manager <no-reply@example.com>";
-
-  if (!apiKey) {
-    log("RESEND_API_KEY not set — skipping email to " + to, "reminders");
-    return;
-  }
-
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ from, to, subject, html }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    log(`Failed to send email to ${to}: ${res.status} ${body}`, "reminders");
-  } else {
-    log(`Reminder sent to ${to}`, "reminders");
-  }
-}
+import { sendEmail } from "./email";
 
 // ─── Build reminder email HTML ───────────────────────────────────────────────
 
