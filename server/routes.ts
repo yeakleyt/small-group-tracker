@@ -499,6 +499,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
       hostUserId: hostUserId ? Number(hostUserId) : null,
       isLeaderLocked: false,
     });
+    // Seed attendance — all current group members default to attending
+    const memberships = storage.getMembershipsForGroup(gid);
+    storage.seedAttendance(meeting.id, memberships.map(m => m.userId));
     return res.json(meeting);
   });
 
@@ -519,10 +522,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
         return safe;
       })() : null,
     }));
+    const attendance = storage.getAttendanceForMeeting(meeting.id);
     return res.json({
       meeting,
       leader: leader ? { ...leader, user: leaderUser ? (() => { const { passwordHash, ...s } = leaderUser; return s; })() : null } : null,
       foodSlots: enrichedSlots,
+      attendance,
     });
   });
 
@@ -700,6 +705,44 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     const updated = storage.unclaimFoodSlot(slotId);
     return res.json(updated);
+  });
+
+  // Assign food slot to a specific member (group_admin+)
+  app.post("/api/food-slots/:id/assign", (req, res) => {
+    const slotId = Number(req.params.id);
+    const { meetingId, userId } = req.body;
+    if (!meetingId) return res.status(400).json({ error: "meetingId required" });
+    const meeting = storage.getMeetingById(Number(meetingId));
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const adminId = requireGroupAdmin(req, res, meeting.groupId);
+    if (!adminId) return;
+    const slots = storage.getFoodSlotsForMeeting(meeting.id);
+    const slot = slots.find(s => s.id === slotId);
+    if (!slot) return res.status(404).json({ error: "Slot not found" });
+    if (slot.isLocked) return res.status(403).json({ error: "Slot is locked" });
+    // userId null = unassign
+    const targetId = userId ? Number(userId) : null;
+    const updated = storage.updateFoodSlot(slotId, { assignedUserId: targetId });
+    return res.json(updated);
+  });
+
+  // Update attendance for a member
+  app.patch("/api/meetings/:id/attendance/:userId", (req, res) => {
+    const meetingId = Number(req.params.id);
+    const targetUserId = Number(req.params.userId);
+    const { isAttending } = req.body;
+    if (typeof isAttending !== "boolean") return res.status(400).json({ error: "isAttending (boolean) required" });
+    const meeting = storage.getMeetingById(meetingId);
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    const access = requireGroupAccess(req, res, meeting.groupId);
+    if (!access) return;
+    // Only the member themselves or a group admin / app admin may change status
+    const isAdmin = access.role === "group_admin" || access.role === "app_admin";
+    if (!isAdmin && access.userId !== targetUserId) {
+      return res.status(403).json({ error: "You can only update your own attendance" });
+    }
+    const record = storage.setAttendance(meetingId, targetUserId, isAttending);
+    return res.json(record);
   });
 
   // ── Resources ──────────────────────────────────────────────────────────────

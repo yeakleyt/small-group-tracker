@@ -95,10 +95,21 @@ export interface FoodSlot {
   assignedUser?: User | null;
 }
 
+export interface AttendanceRecord {
+  id: number;
+  meetingId: number;
+  userId: number;
+  isAttending: boolean;
+  updatedAt: string;
+  firstName: string;
+  lastName: string;
+}
+
 export interface MeetingDetail {
   meeting: Meeting;
   leader: LeaderSignup | null;
   foodSlots: FoodSlot[];
+  attendance: AttendanceRecord[];
 }
 
 export interface ChatMessage {

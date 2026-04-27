@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, and, inArray, gte, desc, sql } from "drizzle-orm";
 import {
-  users, groups, groupMemberships, invitations, meetings, leaderSignups, foodSlots, resources, resourceLinks, chatMessages, pushSubscriptions,
+  users, groups, groupMemberships, invitations, meetings, leaderSignups, foodSlots, meetingAttendance, resources, resourceLinks, chatMessages, pushSubscriptions,
   type User, type InsertUser,
   type Group, type InsertGroup,
   type GroupMembership, type InsertGroupMembership,
@@ -10,6 +10,7 @@ import {
   type Meeting, type InsertMeeting,
   type LeaderSignup, type InsertLeaderSignup,
   type FoodSlot, type InsertFoodSlot,
+  type MeetingAttendance, type InsertMeetingAttendance,
   type Resource, type InsertResource,
   type ResourceLink, type InsertResourceLink,
   type ChatMessage, type InsertChatMessage,
@@ -131,6 +132,15 @@ sqlite.exec(`
     auth TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS meeting_attendance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id INTEGER NOT NULL REFERENCES meetings(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    is_attending INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(meeting_id, user_id)
+  );
 `);
 
 // ─── Storage interface ──────────────────────────────────────────────────────
@@ -205,6 +215,12 @@ export interface IStorage {
   getChatMessageById(id: number): ChatMessage | undefined;
   createChatMessage(data: InsertChatMessage): ChatMessage;
   deleteChatMessage(id: number): void;
+
+  // Attendance
+  getAttendanceForMeeting(meetingId: number): (MeetingAttendance & { firstName: string; lastName: string })[]; 
+  seedAttendance(meetingId: number, userIds: number[]): void;
+  setAttendance(meetingId: number, userId: number, isAttending: boolean): MeetingAttendance;
+  deleteAttendanceForMeeting(meetingId: number): void;
 
   // Push subscriptions
   savePushSubscription(data: InsertPushSubscription): PushSubscription;
@@ -345,9 +361,10 @@ class Storage implements IStorage {
     return db.update(meetings).set(data).where(eq(meetings.id, id)).returning().get();
   }
   deleteMeeting(id: number) {
-    // cascade delete slots
+    // cascade delete slots + attendance
     db.delete(foodSlots).where(eq(foodSlots.meetingId, id)).run();
     db.delete(leaderSignups).where(eq(leaderSignups.meetingId, id)).run();
+    db.delete(meetingAttendance).where(eq(meetingAttendance.meetingId, id)).run();
     db.delete(meetings).where(eq(meetings.id, id)).run();
   }
 
@@ -438,6 +455,51 @@ class Storage implements IStorage {
   }
   deleteChatMessage(id: number) {
     db.delete(chatMessages).where(eq(chatMessages.id, id)).run();
+  }
+
+  // ── Attendance ─────────────────────────────────────────────────────
+  getAttendanceForMeeting(meetingId: number) {
+    return db
+      .select({
+        id: meetingAttendance.id,
+        meetingId: meetingAttendance.meetingId,
+        userId: meetingAttendance.userId,
+        isAttending: meetingAttendance.isAttending,
+        updatedAt: meetingAttendance.updatedAt,
+        firstName: users.firstName,
+        lastName: users.lastName,
+      })
+      .from(meetingAttendance)
+      .innerJoin(users, eq(meetingAttendance.userId, users.id))
+      .where(eq(meetingAttendance.meetingId, meetingId))
+      .orderBy(users.firstName, users.lastName)
+      .all();
+  }
+  seedAttendance(meetingId: number, userIds: number[]) {
+    const now = new Date().toISOString();
+    for (const userId of userIds) {
+      db.insert(meetingAttendance)
+        .values({ meetingId, userId, isAttending: true, updatedAt: now })
+        .onConflictDoNothing()
+        .run();
+    }
+  }
+  setAttendance(meetingId: number, userId: number, isAttending: boolean) {
+    const now = new Date().toISOString();
+    // Upsert
+    db.insert(meetingAttendance)
+      .values({ meetingId, userId, isAttending, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [meetingAttendance.meetingId, meetingAttendance.userId],
+        set: { isAttending, updatedAt: now },
+      })
+      .run();
+    return db.select().from(meetingAttendance)
+      .where(and(eq(meetingAttendance.meetingId, meetingId), eq(meetingAttendance.userId, userId)))
+      .get()!;
+  }
+  deleteAttendanceForMeeting(meetingId: number) {
+    db.delete(meetingAttendance).where(eq(meetingAttendance.meetingId, meetingId)).run();
   }
 
   // ── Push subscriptions ───────────────────────────────────────────────────────────

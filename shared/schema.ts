@@ -118,6 +118,20 @@ export const insertFoodSlotSchema = createInsertSchema(foodSlots).omit({ id: tru
 export type InsertFoodSlot = z.infer<typeof insertFoodSlotSchema>;
 export type FoodSlot = typeof foodSlots.$inferSelect;
 
+// ─── Meeting Attendance ───────────────────────────────────────────────────────
+
+export const meetingAttendance = sqliteTable("meeting_attendance", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  meetingId: integer("meeting_id").notNull().references(() => meetings.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  isAttending: integer("is_attending", { mode: "boolean" }).notNull().default(true),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+
+export const insertMeetingAttendanceSchema = createInsertSchema(meetingAttendance).omit({ id: true });
+export type InsertMeetingAttendance = z.infer<typeof insertMeetingAttendanceSchema>;
+export type MeetingAttendance = typeof meetingAttendance.$inferSelect;
+
 // ─── Group Resources ───────────────────────────────────────────────────────────
 
 export const resources = sqliteTable("resources", {

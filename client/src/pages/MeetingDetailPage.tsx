@@ -14,9 +14,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   CalendarDays, MapPin, Clock, ArrowLeft, Mic2, UtensilsCrossed,
-  CheckCircle, Plus, Pencil, Trash2, Lock, Unlock, User as UserIcon
+  CheckCircle, Plus, Pencil, Trash2, Lock, Unlock, Users
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import type { MeetingDetail, MemberWithUser } from "@/lib/types";
@@ -37,6 +38,8 @@ export function MeetingDetailPage() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [assignLeaderUserId, setAssignLeaderUserId] = useState("");
   const [assignLeaderOpen, setAssignLeaderOpen] = useState(false);
+  const [assignFoodSlotId, setAssignFoodSlotId] = useState<number | null>(null);
+  const [assignFoodUserId, setAssignFoodUserId] = useState("");
 
   const { data, isLoading } = useQuery<MeetingDetail>({
     queryKey: ["/api/meetings", meetingId],
@@ -98,10 +101,30 @@ export function MeetingDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/meetings", meetingId] }),
   });
 
+  const assignFoodMutation = useMutation({
+    mutationFn: ({ slotId, userId }: { slotId: number; userId: number | null }) =>
+      apiRequest("POST", `/api/food-slots/${slotId}/assign`, { meetingId, userId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/meetings", meetingId] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      setAssignFoodSlotId(null);
+      setAssignFoodUserId("");
+      toast({ title: "Food slot assigned" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const attendanceMutation = useMutation({
+    mutationFn: ({ userId, isAttending }: { userId: number; isAttending: boolean }) =>
+      apiRequest("PATCH", `/api/meetings/${meetingId}/attendance/${userId}`, { isAttending }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/meetings", meetingId] }),
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   if (isLoading) return <div className="max-w-3xl mx-auto"><Skeleton className="h-80" /></div>;
   if (!data) return <div className="p-8 text-center text-muted-foreground">Meeting not found</div>;
 
-  const { meeting, leader, foodSlots } = data;
+  const { meeting, leader, foodSlots, attendance } = data;
   const myLeaderSignup = leader?.userId === user?.id;
 
   function fmtDate(d: string, t: string) {
@@ -243,6 +266,9 @@ export function MeetingDetailPage() {
                       {!isClaimed && !slot.isLocked && !isPast && (
                         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => claimFoodMutation.mutate(slot.id)}>Claim</Button>
                       )}
+                      {isGroupAdmin && !isClaimed && !slot.isLocked && !isPast && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setAssignFoodSlotId(slot.id); setAssignFoodUserId(""); }}>Assign</Button>
+                      )}
                       {isMine && !isPast && (
                         <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => unclaimFoodMutation.mutate(slot.id)}>Release</Button>
                       )}
@@ -310,6 +336,84 @@ export function MeetingDetailPage() {
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setAssignLeaderOpen(false)}>Cancel</Button>
               <Button onClick={() => claimLeaderMutation.mutate(Number(assignLeaderUserId))} disabled={!assignLeaderUserId || claimLeaderMutation.isPending}>Assign</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Attendance section */}
+      {attendance.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Users className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              Attendance
+              <span className="text-xs font-normal text-muted-foreground ml-1">
+                {attendance.filter(a => a.isAttending).length} of {attendance.length} attending
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {attendance.map(record => {
+                const canEdit = isGroupAdmin || record.userId === user?.id;
+                return (
+                  <div key={record.userId} className={`flex items-center gap-3 p-2.5 rounded-lg border ${
+                    record.isAttending ? "bg-card" : "bg-muted/40 border-dashed"
+                  }`}>
+                    <Checkbox
+                      id={`attend-${record.userId}`}
+                      checked={record.isAttending}
+                      disabled={!canEdit || attendanceMutation.isPending}
+                      onCheckedChange={checked =>
+                        attendanceMutation.mutate({ userId: record.userId, isAttending: !!checked })
+                      }
+                    />
+                    <label
+                      htmlFor={`attend-${record.userId}`}
+                      className={`text-sm cursor-pointer select-none flex-1 ${
+                        !record.isAttending ? "line-through text-muted-foreground" : ""
+                      } ${!canEdit ? "cursor-default" : ""}`}
+                    >
+                      {record.firstName} {record.lastName}
+                    </label>
+                    {!record.isAttending && (
+                      <span className="text-xs text-muted-foreground">Not attending</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Assign food dialog */}
+      <Dialog open={assignFoodSlotId !== null} onOpenChange={open => { if (!open) { setAssignFoodSlotId(null); setAssignFoodUserId(""); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Assign Food Slot</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-1.5">
+              <Label>Assign to Member</Label>
+              <Select value={assignFoodUserId} onValueChange={setAssignFoodUserId}>
+                <SelectTrigger><SelectValue placeholder="Choose a member" /></SelectTrigger>
+                <SelectContent>
+                  {members.map(m => (
+                    <SelectItem key={m.userId} value={String(m.userId)}>
+                      {m.user.firstName} {m.user.lastName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => { setAssignFoodSlotId(null); setAssignFoodUserId(""); }}>Cancel</Button>
+              <Button
+                disabled={!assignFoodUserId || assignFoodMutation.isPending}
+                onClick={() => assignFoodMutation.mutate({ slotId: assignFoodSlotId!, userId: Number(assignFoodUserId) })}
+              >
+                Assign
+              </Button>
             </div>
           </div>
         </DialogContent>
