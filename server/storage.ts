@@ -221,6 +221,7 @@ export interface IStorage {
   seedAttendance(meetingId: number, userIds: number[]): void;
   setAttendance(meetingId: number, userId: number, isAttending: boolean): MeetingAttendance;
   deleteAttendanceForMeeting(meetingId: number): void;
+  backfillAttendance(): void;
 
   // Push subscriptions
   savePushSubscription(data: InsertPushSubscription): PushSubscription;
@@ -500,6 +501,14 @@ class Storage implements IStorage {
   }
   deleteAttendanceForMeeting(meetingId: number) {
     db.delete(meetingAttendance).where(eq(meetingAttendance.meetingId, meetingId)).run();
+  }
+  backfillAttendance() {
+    const allMeetings = db.select().from(meetings).all();
+    for (const meeting of allMeetings) {
+      const memberships = db.select().from(groupMemberships)
+        .where(eq(groupMemberships.groupId, meeting.groupId)).all();
+      this.seedAttendance(meeting.id, memberships.map(m => m.userId));
+    }
   }
 
   // ── Push subscriptions ───────────────────────────────────────────────────────────

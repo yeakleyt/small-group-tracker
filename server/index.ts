@@ -4,7 +4,7 @@ import MemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import { seedAdminIfNeeded } from "./storage";
+import { seedAdminIfNeeded, storage } from "./storage";
 import { startReminderScheduler } from "./reminders";
 
 const app = express();
@@ -88,6 +88,7 @@ app.use((req, res, next) => {
   await registerRoutes(httpServer, app);
 
   // Start daily email reminder scheduler (only runs if RESEND_API_KEY is set)
+  storage.backfillAttendance();
   if (process.env.NODE_ENV === "production") {
     startReminderScheduler();
   }
